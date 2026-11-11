@@ -1,0 +1,57 @@
+# config.yaml - Configuración principal del proyecto
+
+general:
+  institucion: "Open Satellite Project"
+  generateTiff: True
+  archivo_registro: "ultima_descarga.txt"
+
+satelite:
+  channels:
+    - "01"
+    - "09"
+    - "13"
+  channels_ideam:
+    - "C01"
+    - "C09"
+    - "C13"
+  base_url: "https://bart.ideam.gov.co/ospa/sensores/pasivos/satelite/GOES19/RAW/"
+  satellite: "G19"
+
+paths:
+  base: ""  # Vacío para resolver dinámicamente la ruta relativa del proyecto
+  input: "input"
+  shapes: "shapes"
+  output: "output"
+  latest: "latest"
+  colors: "colors"
+
+shapes:
+  departamentos: "MGN_DPTO_POLITICO"
+  departamentos_layer: "MGN_DPTO_POLITICO"
+  paises: "ne_10m_admin_0_countries/ne_10m_admin_0_countries"
+  paises_layer: "countries"
+
+colors:
+  visible: "grey255.cpt"
+  infrarojo: "thermal.cpt"
+  vapor_agua: "WV.cpt"
+
+plotting:
+  resolution_zoomed: 0.2
+  resolution_full: 1.5
+  dpi_default: 100
+  max_pixels: 65536
+  radius_nautical_miles: 200
+  show_rings: True
+  ring_mode: "individual"  # Opciones: "centroid", "individual"
+  label_offset_x: 0.01
+  rect_height_factor: 0.03
+  title_font_size_zoomed: 8
+  institution_font_size_zoomed: 8
+  title_font_size_full: 10
+  institution_font_size_full: 10
+  extent_default:
+    - -100 #W
+    - -14 #S
+    - -50 #E
+    - 30 #N

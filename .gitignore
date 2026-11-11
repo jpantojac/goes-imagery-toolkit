@@ -1,0 +1,50 @@
+# ==========================================
+# Satellite Products & Imagery Data
+# ==========================================
+# Large NetCDF binary downloads
+input/
+app/input/
+*.nc
+
+# Rendered output products (PNG, GeoTIFF, Worldfiles)
+output/
+app/output/
+latest/
+app/latest/
+test_output/
+app/test_output/
+*.tif
+*.pgw
+*.zip
+ultima_descarga.txt
+
+# ==========================================
+# Python Runtime & Bytecode
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ==========================================
+# Virtual Environments
+# ==========================================
+venv/
+env/
+.venv/
+goes19env/
+ENV/
+
+# ==========================================
+# IDEs & System Files
+# ==========================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

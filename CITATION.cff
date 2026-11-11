@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use this software in your research, please cite it using the metadata below."
+title: "GOES Imagery Toolkit: Automated Processing, Radiometric Calibration, and Cartographic Visualization for GOES-16/19 ABI Data"
+authors:
+  - family-names: "Pantoja Clavijo"
+    given-names: "Julian"
+    email: "julianpc.dev@gmail.com"
+version: "1.0.0"
+date-released: "2026-05-23"
+license: "MIT"
+repository-code: "https://github.com/julianpc/goes-imagery-toolkit"
+keywords:
+  - "earth-observation"
+  - "remote-sensing"
+  - "satellite-meteorology"
+  - "goes-16"
+  - "goes-19"
+  - "advanced-baseline-imager"
+  - "radiometric-calibration"
+  - "geospatial"
+  - "gdal"
+

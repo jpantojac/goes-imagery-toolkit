@@ -1,0 +1,11 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: goes-imagery-toolkit:latest
+    container_name: goes-toolkit
+    volumes:
+      - ./app:/app
+    working_dir: /app
+    command: tail -f /dev/null
