@@ -22,18 +22,10 @@ def create_interpolated_cpt(points, filename):
     return path
 
 def build_all_palettes():
-    # CH01: Blue Visible (0.47 µm) - Atmospheric / Blue tint
-    ch01_pts = [
-        (0.00,   0,   0,   0),
-        (0.15,  15,  35,  75),
-        (0.35,  40,  90, 160),
-        (0.60, 100, 160, 220),
-        (0.85, 190, 220, 250),
-        (1.00, 255, 255, 255),
-    ]
-    create_interpolated_cpt(ch01_pts, "ch01.cpt")
+    # CH01: Blue Visible (0.47 µm) - Grayscale reflective (from grey255.cpt, original active palette)
+    shutil.copyfile(os.path.join(COLORS_DIR, "grey255.cpt"), os.path.join(COLORS_DIR, "ch01.cpt"))
 
-    # CH02: Red Visible (0.64 µm) - High-contrast grayscale (from grey255.cpt)
+    # CH02: Red Visible (0.64 µm) - Grayscale reflective (from grey255.cpt)
     shutil.copyfile(os.path.join(COLORS_DIR, "grey255.cpt"), os.path.join(COLORS_DIR, "ch02.cpt"))
 
     # CH03: Veggie Near-IR (0.86 µm) - Chlorophyll & Soil / Veggie enhancement
@@ -122,38 +114,31 @@ def build_all_palettes():
     ]
     create_interpolated_cpt(ch12_pts, "ch12.cpt")
 
-    # CH13: Clean Longwave IR Window (10.35 µm) - Convective Rainbow (from colors.rainbow)
-    # Generate directly from colors.py rainbow definition
-    try:
-        import colors.colors as clr
-        r_cmap = clr.rainbow
-        ch13_pts = []
-        # Sample 100 points across [-90, +50]
-        t_min, t_max = -90.0, 50.0
-        for i in range(101):
-            f = i / 100.0
-            t_val = t_min + f * (t_max - t_min)
-            rgba = r_cmap(f)
-            r_int = int(round(rgba[0] * 255))
-            g_int = int(round(rgba[1] * 255))
-            b_int = int(round(rgba[2] * 255))
-            ch13_pts.append((t_val, r_int, g_int, b_int))
+    # CH13: Clean Longwave IR Window (10.35 µm) - Realce Oklahoma (original colors.rainbow)
+    colors_py_path = os.path.join(COLORS_DIR, "colors.py")
+    ch13_pts = []
+    if os.path.exists(colors_py_path):
+        import re
+        with open(colors_py_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        matches = re.findall(
+            r'\(([\d\.]+)\s*,\s*\'#([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})',
+            content
+        )
+        for factor_str, r_hex, g_hex, b_hex in matches:
+            factor = float(factor_str)
+            r = int(r_hex, 16)
+            g = int(g_hex, 16)
+            b = int(b_hex, 16)
+            temp = -90.0 + factor * 140.0
+            ch13_pts.append((temp, r, g, b))
+
+    if ch13_pts:
         create_interpolated_cpt(ch13_pts, "ch13.cpt")
-    except Exception as e:
-        # Fallback to standard Rainbow points
-        ch13_pts = [
-            (-90.0, 255, 255, 255),
-            (-80.0, 255,   0, 255),
-            (-70.0, 255,   0,   0),
-            (-60.0, 255, 165,   0),
-            (-50.0, 255, 255,   0),
-            (-40.0,   0, 255,   0),
-            (-30.0,   0, 255, 255),
-            (-20.0,   0,   0, 255),
-            (  0.0, 180, 180, 180),
-            ( 50.0,  20,  20,  20),
-        ]
-        create_interpolated_cpt(ch13_pts, "ch13.cpt")
+        create_interpolated_cpt(ch13_pts, "oklahoma.cpt")
+    else:
+        # Fallback if colors.py not found
+        shutil.copyfile(os.path.join(COLORS_DIR, "thermal.cpt"), os.path.join(COLORS_DIR, "ch13.cpt"))
 
     # CH14: Traditional Longwave IR (11.20 µm) - From IR4AVHRR6.cpt
     shutil.copyfile(os.path.join(COLORS_DIR, "IR4AVHRR6.cpt"), os.path.join(COLORS_DIR, "ch14.cpt"))

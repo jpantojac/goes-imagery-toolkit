@@ -103,7 +103,7 @@ rainbow = mpl.colors.LinearSegmentedColormap.from_list("rainbow", [
 (0.98,'#840095ff'),
 (0.99,'#840095ff'),
 (1,'#84009500')
+])
 
-
- ])
+oklahoma = rainbow
 

@@ -1179,7 +1179,11 @@ def processImage(
         clim_min, clim_max = -90.0, 50.0
 
     cmap_applied = False
-    if os.path.exists(cpt_path):
+    if Band == 13 and colors and hasattr(colors, 'rainbow'):
+        # Canal 13: Realce Oklahoma nativo (colors.rainbow)
+        im.set_cmap(colors.rainbow)
+        cmap_applied = True
+    elif os.path.exists(cpt_path):
         cpt_dict = loadCPT(cpt_path)
         if cpt_dict is not None:
             cpt_cmap = LinearSegmentedColormap(f'cpt_ch{Band:02d}', cpt_dict)

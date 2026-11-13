@@ -55,7 +55,7 @@ The toolkit provides dedicated scientific colormaps (`ch01.cpt` through `ch16.cp
 
 | Band | Central $\lambda$ | Spectrum | Native Res. | Colormap | Meteorological Application |
 |:---:|:---:|:---:|:---:|:---:|:---|
-| **C01** | $0.47\ \mu\text{m}$ | Visible (Blue) | 1 km | `ch01.cpt` | Daytime aerosol, smoke detection, atmospheric haze |
+| **C01** | $0.47\ \mu\text{m}$ | Visible (Blue) | 1 km | `ch01.cpt` | Daytime aerosol, smoke detection, atmospheric haze (Grayscale reflective) |
 | **C02** | $0.64\ \mu\text{m}$ | Visible (Red) | 0.5 km | `ch02.cpt` | High-resolution daytime cloud, storm tracking, terrain & land |
 | **C03** | $0.86\ \mu\text{m}$ | Near-IR (Veggie) | 1 km | `ch03.cpt` | Chlorophyll/NDVI, burn scars, water body delineation |
 | **C04** | $1.37\ \mu\text{m}$ | Near-IR (Cirrus) | 2 km | `ch04.cpt` | Faint high-altitude cirrus cloud detection against dark surface |
@@ -63,11 +63,11 @@ The toolkit provides dedicated scientific colormaps (`ch01.cpt` through `ch16.cp
 | **C06** | $2.25\ \mu\text{m}$ | Near-IR (Cloud Size) | 2 km | `ch06.cpt` | Cloud particle effective radius, microphysics |
 | **C07** | $3.90\ \mu\text{m}$ | Shortwave IR | 2 km | `ch07.cpt` | Wildfire & hotspot detection, nocturnal fog/stratus |
 | **C08** | $6.19\ \mu\text{m}$ | Upper Troposphere WV | 2 km | `ch08.cpt` | Upper-level jet streams, dry slots, dynamical vorticity |
-| **C09** | $6.95\ \mu\text{m}$ | Mid Troposphere WV | 2 km | `ch09.cpt` | Mid-tropospheric moisture, synoptic circulation |
+| **C09** | $6.95\ \mu\text{m}$ | Mid Troposphere WV | 2 km | `ch09.cpt` | Mid-tropospheric moisture, synoptic circulation (WV red-black) |
 | **C10** | $7.34\ \mu\text{m}$ | Lower Troposphere WV | 2 km | `ch10.cpt` | Low-level humidity, convective storm precursors |
 | **C11** | $8.50\ \mu\text{m}$ | Cloud-Top Phase | 2 km | `ch11.cpt` | Cloud thermodynamic phase (ice vs liquid), volcanic $SO_2$ |
 | **C12** | $9.61\ \mu\text{m}$ | Ozone | 2 km | `ch12.cpt` | Total column ozone, stratospheric intrusions |
-| **C13** | $10.35\ \mu\text{m}$ | Clean Longwave IR | 2 km | `ch13.cpt` | Primary cloud-top temperature, convective storms (Rainbow) |
+| **C13** | $10.35\ \mu\text{m}$ | Clean Longwave IR | 2 km | `ch13.cpt` | Primary cloud-top temperature, convective storms (Realce Oklahoma / Rainbow) |
 | **C14** | $11.20\ \mu\text{m}$ | Traditional Longwave IR| 2 km | `ch14.cpt` | Dvorak hurricane intensity analysis, SST validation |
 | **C15** | $12.30\ \mu\text{m}$ | Dirty Longwave IR | 2 km | `ch15.cpt` | Low-level moisture correction, airborne dust & sandstorms |
 | **C16** | $13.30\ \mu\text{m}$ | $CO_2$ Longwave IR | 2 km | `ch16.cpt` | Cloud-top height estimation, tropospheric cooling |
