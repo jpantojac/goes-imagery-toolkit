@@ -420,7 +420,7 @@ def _progress_download_file(
         raise RuntimeError("The 'requests' package is required for downloading satellite files.")
 
     ch_label = "CH"
-    for tag in ("_M6C", "_M3C", "_M4C", "_C"):
+    for tag in ("-M6C", "-M3C", "-M4C", "-C", "_M6C", "_M3C", "_M4C", "_C"):
         if tag in name_file:
             ch_label = "C" + name_file.split(tag)[1][:2]
             break
