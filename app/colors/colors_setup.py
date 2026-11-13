@@ -185,3 +185,4 @@ def build_all_palettes():
 
 if __name__ == '__main__':
     build_all_palettes()
+

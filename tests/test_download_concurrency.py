@@ -142,6 +142,62 @@ class TestDownloadConcurrency(unittest.TestCase):
             self.assertEqual(res, ['/mock/file.nc'])
             mock_dl.assert_called_once_with(['20261112'], ['02'], ['10'], on_file_ready=None)
 
+    def test_cli_parser_overwrite_flags(self):
+        """Verifies CLI parser correctly interprets --overwrite and --force arguments."""
+        parser = main.build_parser()
+
+        args1 = parser.parse_args(['--mode=auto', '--source=aws', '--overwrite=true'])
+        self.assertTrue(args1.overwrite)
+
+        args2 = parser.parse_args(['--mode=auto', '--source=aws', '--force=1'])
+        self.assertTrue(args2.overwrite)
+
+        args3 = parser.parse_args(['--mode=auto', '--source=aws', '--overwrite=false'])
+        self.assertFalse(args3.overwrite)
+
+        args_default = parser.parse_args(['--mode=auto', '--source=aws'])
+        self.assertFalse(args_default.overwrite)
+
+    def test_process_image_output_cache_hit_skips_rendering(self):
+        """Verifies processImage skips expensive NetCDF reading/remapping when outputs exist and overwrite=False."""
+        filename = "OR_ABI-L1b-RadF-M6C09_G19_s20263171920207_e20263171929520_c20263171929559.nc"
+        # Julian day 317 in 2026 is 2026-11-13 -> timestamp 202611131920
+        out_c09 = os.path.join(self.test_dir, "output", "317", "C09")
+        os.makedirs(out_c09, exist_ok=True)
+        img_out = os.path.join(out_c09, "202611131920.png")
+        tif_out = os.path.join(out_c09, "202611131920.tif")
+        with open(img_out, 'w') as f:
+            f.write("mock png")
+        with open(tif_out, 'w') as f:
+            f.write("mock tif")
+
+        with patch.object(main, 'basePath', self.test_dir):
+            with patch.object(main, 'Dataset') as mock_ds:
+                main.processImage(filename, overwrite=False)
+                # Cache hit should prevent Dataset from being opened
+                mock_ds.assert_not_called()
+
+                # Also verify latest/ copy was updated
+                latest_png = os.path.join(self.test_dir, "latest", "latestC09.png")
+                self.assertTrue(os.path.exists(latest_png))
+
+    def test_process_image_output_cache_bypassed_when_overwrite_true(self):
+        """Verifies processImage attempts rendering when overwrite=True even if output exists."""
+        filename = "OR_ABI-L1b-RadF-M6C09_G19_s20263171920207_e20263171929520_c20263171929559.nc"
+        out_c09 = os.path.join(self.test_dir, "output", "317", "C09")
+        os.makedirs(out_c09, exist_ok=True)
+        img_out = os.path.join(out_c09, "202611131920.png")
+        tif_out = os.path.join(out_c09, "202611131920.tif")
+        with open(img_out, 'w') as f:
+            f.write("mock png")
+        with open(tif_out, 'w') as f:
+            f.write("mock tif")
+
+        with patch.object(main, 'basePath', self.test_dir):
+            with patch.object(main, 'Dataset', side_effect=RuntimeError("Dataset opened as expected")):
+                with self.assertRaises(RuntimeError):
+                    main.processImage(filename, overwrite=True)
+
 
 if __name__ == '__main__':
     unittest.main()

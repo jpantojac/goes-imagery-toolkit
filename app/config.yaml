@@ -3,6 +3,7 @@
 general:
   institution: "Open Satellite Project"
   generate_tiff: true
+  overwrite: false
   registry_file: "ultima_descarga.txt"
 
 satellite:

@@ -669,7 +669,7 @@ def download(dates: List[str], hours: List[str], minutes: List[str]) -> List[str
     """
     return download_and_pipeline(dates, hours, minutes, on_file_ready=None)                
 
-def auto_date(source: str, label: bool = False, watermark: Optional[str] = None) -> None:
+def auto_date(source: str, label: bool = False, watermark: Optional[str] = None, overwrite: bool = False) -> None:
     """
     Executes near-real-time automated observation retrieval and product generation.
 
@@ -677,12 +677,13 @@ def auto_date(source: str, label: bool = False, watermark: Optional[str] = None)
         source (str): Satellite data source identifier ('aws' or 'ideam').
         label (bool, optional): If True, renders title bar, colorbar, and metadata. Defaults to False.
         watermark (Optional[str], optional): Custom institution or attribution watermark. Defaults to None.
+        overwrite (bool, optional): If True, forces product re-generation. Defaults to False.
     """
     logging.info("Automated generation mode started")
     if source == 'aws':
-        source_AWS(label, watermark=watermark)
+        source_AWS(label, watermark=watermark, overwrite=overwrite)
     elif source == "ideam":
-        source_IDEAM(label, watermark=watermark)
+        source_IDEAM(label, watermark=watermark, overwrite=overwrite)
     else:
         logging.error(f"Unknown data source: {source}. Supported: aws | ideam")
 
@@ -737,13 +738,14 @@ def read_latest_downloaded() -> dict:
             return resultado
     return {}
 
-def source_IDEAM(label: bool = False, watermark: Optional[str] = None) -> None:
+def source_IDEAM(label: bool = False, watermark: Optional[str] = None, overwrite: bool = False) -> None:
     """
     Scrapes and retrieves the most recent Level 1b imagery from the IDEAM regional HTTP archive.
 
     Args:
         label (bool, optional): If True, renders metadata, colorbar, and title banner. Defaults to False.
         watermark (Optional[str], optional): Custom watermark or attribution string. Defaults to None.
+        overwrite (bool, optional): If True, forces product re-generation. Defaults to False.
     """
     # Obtener el contenido de la página
     response = requests.get(base_url, verify=False)
@@ -785,11 +787,11 @@ def source_IDEAM(label: bool = False, watermark: Optional[str] = None) -> None:
                 logging.info(f"La imagen más reciente para {canal} ({archivo_mas_reciente}) ya fue descargada.")
 
     for aFile in archivos_descargados:
-        processImage(aFile, label=label, watermark=watermark)
+        processImage(aFile, label=label, watermark=watermark, overwrite=overwrite)
     
     write_latest_downloaded(ultima_descarga)
 
-def source_AWS(label: bool = False, watermark: Optional[str] = None) -> None:
+def source_AWS(label: bool = False, watermark: Optional[str] = None, overwrite: bool = False) -> None:
     """
     Retrieves and processes the most recent GOES observation slot from NOAA's public AWS S3 bucket.
 
@@ -799,6 +801,7 @@ def source_AWS(label: bool = False, watermark: Optional[str] = None) -> None:
     Args:
         label (bool, optional): If True, renders metadata, colorbar, and title banner. Defaults to False.
         watermark (Optional[str], optional): Custom watermark or attribution string. Defaults to None.
+        overwrite (bool, optional): If True, forces product re-generation. Defaults to False.
     """
     utc = time.gmtime()
     tenMinutesAgo = time.time() - ( 60 * 10 )
@@ -838,13 +841,13 @@ def source_AWS(label: bool = False, watermark: Optional[str] = None) -> None:
     if enable_overlap:
         flist = download_and_pipeline(
             dates, hours, minutes,
-            on_file_ready=lambda f: processImage(f, label=label, watermark=watermark)
+            on_file_ready=lambda f: processImage(f, label=label, watermark=watermark, overwrite=overwrite)
         )
     else:
         flist = download(dates, hours, minutes)
         if flist:
             for aFile in flist:
-                processImage(aFile, label=label, watermark=watermark)
+                processImage(aFile, label=label, watermark=watermark, overwrite=overwrite)
 
     if not flist:
         logging.warning("No files were downloaded. The requested scan may not yet be published on NOAA S3.")
@@ -858,7 +861,8 @@ def manual_date(
     lon: Optional[Union[float, List[float]]] = None,
     label: bool = False,
     bullseye: bool = True,
-    watermark: Optional[str] = None
+    watermark: Optional[str] = None,
+    overwrite: bool = False
 ) -> None:
     """
     Orchestrates manual, targeted satellite imagery generation for specific timestamps and coordinates.
@@ -873,6 +877,7 @@ def manual_date(
         bullseye (bool, optional): If True, renders concentric nautical mile distance rings.
             If False, plots numbered waypoints (P1, P2, ...). Defaults to True.
         watermark (Optional[str], optional): Custom watermark or attribution string. Defaults to None.
+        overwrite (bool, optional): If True, forces product re-generation. Defaults to False.
     """
     prepare_folders(dates)
 
@@ -883,14 +888,14 @@ def manual_date(
         flist = download_and_pipeline(
             dates, hours, minutes,
             on_file_ready=lambda f: processImage(
-                f, lat=lat, lon=lon, label=label, bullseye=bullseye, watermark=watermark
+                f, lat=lat, lon=lon, label=label, bullseye=bullseye, watermark=watermark, overwrite=overwrite
             )
         )
     else:
         flist = download(dates, hours, minutes)
         if flist:
             for aFile in flist:
-                processImage(aFile, lat, lon, label=label, bullseye=bullseye, watermark=watermark)
+                processImage(aFile, lat, lon, label=label, bullseye=bullseye, watermark=watermark, overwrite=overwrite)
 
     if not flist:
         logging.warning("No files were downloaded for the specified dates and times.")
@@ -948,17 +953,27 @@ def get_bounding_box(lat: float, lon: float, radius_miles: float = 100) -> List[
 
     return [west, south, east, north]
 
-def processImage(aFile: str, lat: Optional[Union[float, List[float]]] = None, lon: Optional[Union[float, List[float]]] = None, label: bool = False, bullseye: bool = True, watermark: Optional[str] = None) -> None:
+def processImage(
+    aFile: str,
+    lat: Optional[Union[float, List[float]]] = None,
+    lon: Optional[Union[float, List[float]]] = None,
+    label: bool = False,
+    bullseye: bool = True,
+    watermark: Optional[str] = None,
+    overwrite: bool = False
+) -> None:
     """
     Executes the scientific cartographic and raster processing pipeline for a GOES ABI NetCDF file.
 
     Workflow:
-        1. Metadata Extraction: Parses observation timestamp, spatial resolution, and band properties.
-        2. Geostationary Reprojection: Remaps raw geostationary perspective grid to Equirectangular (WGS84).
-        3. Physical Calibration: Inverts Planck function for thermal IR or computes gamma-enhanced solar reflectance.
-        4. Dynamic Memory Bounding: Constrains maximum dimensions via Lanczos spatial resampling.
-        5. Vector Overlays: Renders national borders, department boundaries, waypoints, and range rings.
-        6. Cartographic Publishing:
+        1. Output Cache Validation: Checks if rendered products (.png, .tif) already exist,
+           skipping CPU-intensive remapping when overwrite=False.
+        2. Metadata Extraction: Parses observation timestamp, spatial resolution, and band properties.
+        3. Geostationary Reprojection: Remaps raw geostationary perspective grid to Equirectangular (WGS84).
+        4. Physical Calibration: Inverts Planck function for thermal IR or computes gamma-enhanced solar reflectance.
+        5. Dynamic Memory Bounding: Constrains maximum dimensions via Lanczos spatial resampling.
+        6. Vector Overlays: Renders national borders, department boundaries, waypoints, and range rings.
+        7. Cartographic Publishing:
            - Visual PNG image with calibrated CPT colormaps and metadata banner.
            - ESRI Worldfile (.pgw) specifying affine transformation parameters.
            - 16-bit GeoTIFF raster (T_B * 100 scaled integer) with LZW compression.
@@ -970,27 +985,57 @@ def processImage(aFile: str, lat: Optional[Union[float, List[float]]] = None, lo
         label (bool, optional): If True, adds colorbar, scale, and metadata footer. Defaults to False.
         bullseye (bool, optional): If True, draws concentric nautical-mile range rings. Defaults to True.
         watermark (Optional[str], optional): Custom institution or attribution banner. Defaults to None.
+        overwrite (bool, optional): If True, re-renders products even if they exist. Defaults to False.
 
     Returns:
         None
     """
     matplotlib.rcParams['figure.dpi'] = 100
-    #print(f"Matplotlib default DPI after setting: {matplotlib.rcParams['figure.dpi']}")
 
     Start = (aFile[aFile.find("_s")+2:aFile.find("_e")])
 
     Band = get_band(aFile, True)
     BandString = get_band(aFile, False)
+    if Band is None or BandString is None:
+        logging.warning("No se pudo identificar la banda para el archivo %s", aFile)
+        return
 
     Wavelenghts = ['[]', '[0.47 μm]', '[0.64 μm]', '[0.865 μm]', '[1.378 μm]', '[1.61 μm]', '[2.25 μm]', '[3.90 μm]', '[6.19 μm]', '[6.95 μm]', '[7.34 μm]', '[8.50 μm]', '[9.61 μm]', '[10.35 μm]', '[11.20 μm]', '[12.30 μm]', '[13.30 μm]']
 
     year = int(Start[0:4])
     dayjulian = int(Start[4:7])
     dayjulianstring = Start[4:7]
+    hour = Start[7:9]
+    minute = Start[9:11]
 
     dayconventional = datetime(int(year), 1, 1) + timedelta(days=int(dayjulian) - 1)
-    date = dayconventional.strftime('%d-%b-%Y')
+    timestamp_str = f"{dayconventional.strftime('%Y%m%d')}{hour}{minute}"
 
+    outFolder = os.path.join(basePath, config['paths']['output'], dayjulianstring, "C" + BandString)
+    expected_image_out = os.path.join(outFolder, f"{timestamp_str}.png")
+    expected_tif_out = os.path.join(outFolder, f"{timestamp_str}.tif")
+
+    # Fast output cache check: skip remapping and rendering if products already exist
+    if not overwrite and os.path.exists(expected_image_out):
+        if not generateTiff or os.path.exists(expected_tif_out):
+            latest_folder = os.path.join(basePath, "latest")
+            latest_png = os.path.join(latest_folder, f"latestC{BandString}.png")
+            latest_pgw = os.path.join(latest_folder, f"latestC{BandString}.pgw")
+            expected_pgw_out = os.path.join(outFolder, f"{timestamp_str}.pgw")
+            create_folder(latest_folder)
+            try:
+                shutil.copyfile(expected_image_out, latest_png)
+                if os.path.exists(expected_pgw_out):
+                    shutil.copyfile(expected_pgw_out, latest_pgw)
+            except Exception as e:
+                logging.debug("Could not copy cached image to latest: %s", e)
+            logging.info(
+                f"[Cache Hit] Image products already exist for Channel {BandString} "
+                f"({timestamp_str}.png). Skipping remapping and rendering."
+            )
+            return
+
+    date = dayconventional.strftime('%d-%b-%Y')
     time = Start[7:9] + ":" + Start[9:11] + " UTC"
 
     if Band <= 6:
@@ -1524,6 +1569,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help='Custom watermark or attribution label on the bottom bar'
     )
+    parser.add_argument(
+        '--overwrite', '--force',
+        dest='overwrite',
+        type=lambda x: str(x).lower() in ('true', '1', 'yes'),
+        default=bool(_cfg_get('general', 'overwrite', 'overwrite_images', default=False)),
+        help='Force re-generation of products even if they already exist in output/ (True/False)'
+    )
     return parser
 
 def main(argv: Optional[List[str]] = None) -> None:
@@ -1623,11 +1675,12 @@ def main(argv: Optional[List[str]] = None) -> None:
                 final_lon,
                 args.label,
                 args.bullseye,
-                watermark=args.watermark
+                watermark=args.watermark,
+                overwrite=args.overwrite
             )
 
     elif args.mode == "auto":
-        auto_date(args.source, args.label, watermark=args.watermark)
+        auto_date(args.source, args.label, watermark=args.watermark, overwrite=args.overwrite)
 
     else:
         logging.error('Unknown execution mode: %s. Use: manual | auto', args.mode)

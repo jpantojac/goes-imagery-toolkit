@@ -176,16 +176,20 @@ python app/main.py --mode="auto" --source="aws" --label=true
 | `--label` | | `bool` | `False` | Render title bar, colorbar, and metadata (`true`/`false`). |
 | `--bullseye` | | `bool` | `True` | Draw concentric range rings (`true`) or marker pins (`false`). |
 | `--watermark` | `--institution`, `--institucion` | `str` | `config.yaml` | Custom label or institution text rendered on bottom bar. |
+| `--overwrite` | `--force` | `bool` | `False` | Force re-generation of products even if `.png` and `.tif` already exist (`true`/`false`). |
 
 ---
 
 ## ⚡ Performance & Parallel Processing
 
-The toolkit features a concurrent download engine and an asynchronous producer-consumer pipeline designed for high-throughput operational and research workloads:
+The toolkit features a concurrent download engine, an asynchronous producer-consumer pipeline, and dual-layer caching designed for high-throughput operational and research workloads:
 
 - **Multi-threaded S3 Ingestion**: Spectral channels (Bands 01 to 16) are retrieved in parallel via `ThreadPoolExecutor` rather than sequential queries, reducing retrieval time by up to **75%**.
+- **Per-Thread Progress Logging**: Ingest progress is logged per thread with percentage bars and channel tags (`[C01]`, `[C13]`), allowing clear monitoring of multi-megabyte transfers.
 - **Asynchronous Pipeline Overlap**: As soon as an individual channel NetCDF finishes downloading, spatial remapping (GDAL) and rendering (Matplotlib) begin immediately in the consumer loop while remaining channels continue downloading in background worker threads.
-- **Zero-Latency Local Cache**: Validates previously downloaded files matching target timestamps on disk (`0 ms` latency), eliminating redundant NOAA S3 queries and saving bandwidth.
+- **Dual-Layer Caching Architecture**:
+  1. **Input S3 NetCDF Cache**: Checks for pre-existing raw `.nc` files matching target timestamps on disk (`0 ms` latency), eliminating redundant NOAA S3 queries and saving network bandwidth.
+  2. **Output Product Cache**: Checks if target `.png` (and `.tif` if enabled) already exist in `output/<julian_day>/C<band>/`. If already generated and `--overwrite=false`, remapping and plotting are skipped entirely, completing repeated runs in **under 1 second**. Use `--overwrite=true` or `--force=true` to regenerate.
 
 ### Concurrency Configuration (`app/config.yaml`)
 
