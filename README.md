@@ -181,6 +181,19 @@ python app/main.py \
   --label=true
 ```
 
+#### Example 4: High-Resolution Clean Imagery Without Borders / Croquis
+Generate ultra-sharp satellite images (e.g. at 4096px resolution or native resolution `--max-dim=0`) without vector outlines or administrative borders:
+```bash
+python app/main.py \
+  --mode="manual" \
+  --source="aws" \
+  --date=20240929 \
+  --hours=11 \
+  --minutes=00 \
+  --croquis=false \
+  --max-dim=4096
+```
+
 ### 2. Automated Mode (Near Real-Time)
 
 Download and generate products for the most recent observation from the NOAA public S3 bucket:
@@ -205,6 +218,8 @@ python app/main.py --mode="auto" --source="aws" --label=true
 | `--overwrite` | `--force` | `bool` | `False` | Force re-generation of products even if `.png` and `.tif` already exist (`true`/`false`). |
 | `--family` | `--palette`, `--enhancement` | `str` | `default` | Colormap enhancement family: `default` (Oklahoma on C13, WV on C09) or `noaa` (official goes.noaa.gov full-disk palettes). |
 | `--c16-enhanced` | `--c16-color` | `bool` | `False` | Display Band 16 (CO2) with convective BD color enhancement instead of thermal grayscale (`true`/`false`). |
+| `--borders` | `--croquis` | `bool` | `True` | Draw administrative vector boundaries (departments and countries / croquis) (`true`/`false`). |
+| `--max-dim` | `--resolution-px` | `int` | `2048` | Maximum output raster dimension in pixels (e.g. `2048`, `4096`, or `0` for uncompressed native resolution). |
 
 ---
 

@@ -689,7 +689,9 @@ def auto_date(
     label: bool = False,
     watermark: Optional[str] = None,
     overwrite: bool = False,
-    family: Optional[str] = None
+    family: Optional[str] = None,
+    borders: bool = True,
+    max_dim: Optional[int] = None
 ) -> None:
     """
     Executes near-real-time automated observation retrieval and product generation.
@@ -700,12 +702,14 @@ def auto_date(
         watermark (Optional[str], optional): Custom institution or attribution watermark. Defaults to None.
         overwrite (bool, optional): If True, forces product re-generation. Defaults to False.
         family (Optional[str], optional): Colormap enhancement family ('default' or 'noaa'). Defaults to None.
+        borders (bool, optional): If True, draws administrative borders / croquis. Defaults to True.
+        max_dim (Optional[int], optional): Max pixel dimension or 0 for uncompressed native. Defaults to None.
     """
     logging.info("Automated generation mode started")
     if source == 'aws':
-        source_AWS(label, watermark=watermark, overwrite=overwrite, family=family)
+        source_AWS(label, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim)
     elif source == "ideam":
-        source_IDEAM(label, watermark=watermark, overwrite=overwrite, family=family)
+        source_IDEAM(label, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim)
     else:
         logging.error(f"Unknown data source: {source}. Supported: aws | ideam")
 
@@ -764,7 +768,9 @@ def source_IDEAM(
     label: bool = False,
     watermark: Optional[str] = None,
     overwrite: bool = False,
-    family: Optional[str] = None
+    family: Optional[str] = None,
+    borders: bool = True,
+    max_dim: Optional[int] = None
 ) -> None:
     """
     Scrapes and retrieves the most recent Level 1b imagery from the IDEAM regional HTTP archive.
@@ -774,6 +780,8 @@ def source_IDEAM(
         watermark (Optional[str], optional): Custom watermark or attribution string. Defaults to None.
         overwrite (bool, optional): If True, forces product re-generation. Defaults to False.
         family (Optional[str], optional): Colormap enhancement family ('default' or 'noaa'). Defaults to None.
+        borders (bool, optional): If True, draws administrative borders / croquis. Defaults to True.
+        max_dim (Optional[int], optional): Max pixel dimension or 0 for uncompressed native. Defaults to None.
     """
     # Obtener el contenido de la página
     response = requests.get(base_url, verify=False)
@@ -815,7 +823,7 @@ def source_IDEAM(
                 logging.info(f"La imagen más reciente para {canal} ({archivo_mas_reciente}) ya fue descargada.")
 
     for aFile in archivos_descargados:
-        processImage(aFile, label=label, watermark=watermark, overwrite=overwrite, family=family)
+        processImage(aFile, label=label, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim)
     
     write_latest_downloaded(ultima_descarga)
 
@@ -823,7 +831,9 @@ def source_AWS(
     label: bool = False,
     watermark: Optional[str] = None,
     overwrite: bool = False,
-    family: Optional[str] = None
+    family: Optional[str] = None,
+    borders: bool = True,
+    max_dim: Optional[int] = None
 ) -> None:
     """
     Retrieves and processes the most recent GOES observation slot from NOAA's public AWS S3 bucket.
@@ -836,6 +846,8 @@ def source_AWS(
         watermark (Optional[str], optional): Custom watermark or attribution string. Defaults to None.
         overwrite (bool, optional): If True, forces product re-generation. Defaults to False.
         family (Optional[str], optional): Colormap enhancement family ('default' or 'noaa'). Defaults to None.
+        borders (bool, optional): If True, draws administrative borders / croquis. Defaults to True.
+        max_dim (Optional[int], optional): Max pixel dimension or 0 for uncompressed native. Defaults to None.
     """
     utc = time.gmtime()
     tenMinutesAgo = time.time() - ( 60 * 10 )
@@ -876,14 +888,14 @@ def source_AWS(
         flist = download_and_pipeline(
             dates, hours, minutes,
             on_file_ready=lambda f: processImage(
-                f, label=label, watermark=watermark, overwrite=overwrite, family=family
+                f, label=label, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim
             )
         )
     else:
         flist = download(dates, hours, minutes)
         if flist:
             for aFile in flist:
-                processImage(aFile, label=label, watermark=watermark, overwrite=overwrite, family=family)
+                processImage(aFile, label=label, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim)
 
     if not flist:
         logging.warning("No files were downloaded. The requested scan may not yet be published on NOAA S3.")
@@ -899,7 +911,9 @@ def manual_date(
     bullseye: bool = True,
     watermark: Optional[str] = None,
     overwrite: bool = False,
-    family: Optional[str] = None
+    family: Optional[str] = None,
+    borders: bool = True,
+    max_dim: Optional[int] = None
 ) -> None:
     """
     Orchestrates manual, targeted satellite imagery generation for specific timestamps and coordinates.
@@ -916,6 +930,8 @@ def manual_date(
         watermark (Optional[str], optional): Custom watermark or attribution string. Defaults to None.
         overwrite (bool, optional): If True, forces product re-generation. Defaults to False.
         family (Optional[str], optional): Colormap enhancement family ('default' or 'noaa'). Defaults to None.
+        borders (bool, optional): If True, draws administrative borders / croquis. Defaults to True.
+        max_dim (Optional[int], optional): Max pixel dimension or 0 for uncompressed native. Defaults to None.
     """
     prepare_folders(dates)
 
@@ -926,7 +942,7 @@ def manual_date(
         flist = download_and_pipeline(
             dates, hours, minutes,
             on_file_ready=lambda f: processImage(
-                f, lat=lat, lon=lon, label=label, bullseye=bullseye, watermark=watermark, overwrite=overwrite, family=family
+                f, lat=lat, lon=lon, label=label, bullseye=bullseye, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim
             )
         )
     else:
@@ -934,7 +950,7 @@ def manual_date(
         if flist:
             for aFile in flist:
                 processImage(
-                    aFile, lat, lon, label=label, bullseye=bullseye, watermark=watermark, overwrite=overwrite, family=family
+                    aFile, lat, lon, label=label, bullseye=bullseye, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim
                 )
 
     if not flist:
@@ -1104,7 +1120,9 @@ def processImage(
     bullseye: bool = True,
     watermark: Optional[str] = None,
     overwrite: bool = False,
-    family: Optional[str] = None
+    family: Optional[str] = None,
+    borders: bool = True,
+    max_dim: Optional[int] = None
 ) -> None:
     """
     Executes the scientific cartographic and raster processing pipeline for a GOES ABI NetCDF file.
@@ -1131,6 +1149,8 @@ def processImage(
         watermark (Optional[str], optional): Custom institution or attribution banner. Defaults to None.
         overwrite (bool, optional): If True, re-renders products even if they exist. Defaults to False.
         family (Optional[str], optional): Colormap enhancement family ('default' or 'noaa'). Defaults to None.
+        borders (bool, optional): If True, draws administrative borders / croquis. Defaults to True.
+        max_dim (Optional[int], optional): Max pixel dimension or 0 for uncompressed native. Defaults to None.
 
     Returns:
         None
@@ -1247,9 +1267,9 @@ def processImage(
     data = grid.ReadAsArray()
     #print(f"Initial data shape: {data.shape}")
 
-    max_dim = 1024
-    if data.shape[1] > max_dim or data.shape[0] > max_dim:
-        scale = min(max_dim / data.shape[1], max_dim / data.shape[0])
+    target_max_dim = max_dim if max_dim is not None else int(_cfg_get('plotting', 'max_dimension', 'max_dim', default=2048))
+    if target_max_dim > 0 and (data.shape[1] > target_max_dim or data.shape[0] > target_max_dim):
+        scale = min(target_max_dim / data.shape[1], target_max_dim / data.shape[0])
         new_width = int(data.shape[1] * scale)
         new_height = int(data.shape[0] * scale)
         #print(f"Resizing data from {data.shape} to ({new_height}, {new_width})")
@@ -1337,29 +1357,39 @@ def processImage(
         y_norm = (lat - extent[1]) / lat_range * data_shape[0]
         return x_norm, y_norm
 
-    dpto_shape = _cfg_get('shapes', 'departments', 'departamentos', default='MGN_DPTO_POLITICO')
-    dpto_layer = _cfg_get('shapes', 'departments_layer', 'departamentos_layer', default='MGN_DPTO_POLITICO')
-    shapefile_path = os.path.join(basePath, config['paths']['shapes'], dpto_shape)
-    bmap.readshapefile(shapefile_path, dpto_layer, drawbounds=False)
+    draw_borders = borders and bool(_cfg_get('plotting', 'show_borders', default=True))
+    draw_departments = draw_borders and bool(_cfg_get('plotting', 'show_departments', default=True))
+    draw_countries = draw_borders and bool(_cfg_get('plotting', 'show_countries', default=True))
 
-    for shape in getattr(bmap, dpto_layer, []):
-        x = [point[0] for point in shape]
-        y = [point[1] for point in shape]
-        x_norm = [(lon - extent[0]) / (extent[2] - extent[0]) * data.shape[1] for lon in x]
-        y_norm = [(lat - extent[1]) / (extent[3] - extent[1]) * data.shape[0] for lat in y]
-        ax.plot(x_norm, y_norm, color='white', linewidth=0.6, zorder=2)
+    if draw_departments:
+        dpto_shape = _cfg_get('shapes', 'departments', 'departamentos', default='MGN_DPTO_POLITICO')
+        dpto_layer = _cfg_get('shapes', 'departments_layer', 'departamentos_layer', default='MGN_DPTO_POLITICO')
+        shapefile_path = os.path.join(basePath, config['paths']['shapes'], dpto_shape)
+        try:
+            bmap.readshapefile(shapefile_path, dpto_layer, drawbounds=False)
+            for shape in getattr(bmap, dpto_layer, []):
+                x = [point[0] for point in shape]
+                y = [point[1] for point in shape]
+                x_norm = [(lon_pt - extent[0]) / (extent[2] - extent[0]) * data.shape[1] for lon_pt in x]
+                y_norm = [(lat_pt - extent[1]) / (extent[3] - extent[1]) * data.shape[0] for lat_pt in y]
+                ax.plot(x_norm, y_norm, color='white', linewidth=0.6, zorder=2)
+        except Exception as e:
+            logging.debug("Could not plot department shapefile: %s", e)
 
-    country_shape = _cfg_get('shapes', 'countries', 'paises', default='ne_10m_admin_0_countries/ne_10m_admin_0_countries')
-    country_layer = _cfg_get('shapes', 'countries_layer', 'paises_layer', default='countries')
-    country_shapefile_path = os.path.join(basePath, config['paths']['shapes'], country_shape)
-    bmap.readshapefile(country_shapefile_path, country_layer, drawbounds=False)
-
-    for shape in getattr(bmap, country_layer, []):
-        x = [point[0] for point in shape]
-        y = [point[1] for point in shape]
-        x_norm = [(lon - extent[0]) / (extent[2] - extent[0]) * data.shape[1] for lon in x]
-        y_norm = [(lat - extent[1]) / (extent[3] - extent[1]) * data.shape[0] for lat in y]
-        ax.plot(x_norm, y_norm, color='white', linewidth=0.6, zorder=2)
+    if draw_countries:
+        country_shape = _cfg_get('shapes', 'countries', 'paises', default='ne_10m_admin_0_countries/ne_10m_admin_0_countries')
+        country_layer = _cfg_get('shapes', 'countries_layer', 'paises_layer', default='countries')
+        country_shapefile_path = os.path.join(basePath, config['paths']['shapes'], country_shape)
+        try:
+            bmap.readshapefile(country_shapefile_path, country_layer, drawbounds=False)
+            for shape in getattr(bmap, country_layer, []):
+                x = [point[0] for point in shape]
+                y = [point[1] for point in shape]
+                x_norm = [(lon_pt - extent[0]) / (extent[2] - extent[0]) * data.shape[1] for lon_pt in x]
+                y_norm = [(lat_pt - extent[1]) / (extent[3] - extent[1]) * data.shape[0] for lat_pt in y]
+                ax.plot(x_norm, y_norm, color='white', linewidth=0.6, zorder=2)
+        except Exception as e:
+            logging.debug("Could not plot countries shapefile: %s", e)
 
     if lat is not None and lon is not None:
         # Asegurar que sean listas para iterar
@@ -1713,6 +1743,20 @@ def build_parser() -> argparse.ArgumentParser:
         default=bool(_cfg_get('colors', 'c16_color_enhanced', 'c16_enhanced', default=False)),
         help='Display Band 16 (CO2) with convective color enhancement instead of grayscale (True/False)'
     )
+    parser.add_argument(
+        '--borders', '--croquis',
+        dest='borders',
+        type=lambda x: str(x).lower() in ('true', '1', 'yes'),
+        default=bool(_cfg_get('plotting', 'show_borders', default=True)),
+        help='Draw vector administrative boundaries (departments and countries / croquis) (True/False)'
+    )
+    parser.add_argument(
+        '--max-dim', '--resolution-px',
+        dest='max_dim',
+        type=int,
+        default=None,
+        help='Max pixel dimension for output image (e.g. 1024, 2048, 4096, or 0 for native resolution). Defaults to config value.'
+    )
     return parser
 
 def main(argv: Optional[List[str]] = None) -> None:
@@ -1814,7 +1858,9 @@ def main(argv: Optional[List[str]] = None) -> None:
                 args.bullseye,
                 watermark=args.watermark,
                 overwrite=args.overwrite,
-                family=args.family
+                family=args.family,
+                borders=args.borders,
+                max_dim=args.max_dim
             )
 
     elif args.mode == "auto":
@@ -1823,7 +1869,9 @@ def main(argv: Optional[List[str]] = None) -> None:
             args.label,
             watermark=args.watermark,
             overwrite=args.overwrite,
-            family=args.family
+            family=args.family,
+            borders=args.borders,
+            max_dim=args.max_dim
         )
 
     else:

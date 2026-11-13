@@ -280,6 +280,45 @@ class TestCalibrationAndGeometry(unittest.TestCase):
         # Debe ser brillante (> 0.8) y no un gris oscuro (< 0.5)
         self.assertGreater(ref_gamma[0], 0.8)
 
+    def test_cli_parser_borders_and_croquis_flags(self):
+        """Verifica que el parser acepte --borders y --croquis (True/False)."""
+        parser = main.build_parser()
+
+        args1 = parser.parse_args(["--mode=auto", "--source=aws", "--borders=false"])
+        self.assertFalse(args1.borders)
+
+        args2 = parser.parse_args(["--mode=auto", "--source=aws", "--croquis=false"])
+        self.assertFalse(args2.borders)
+
+        args3 = parser.parse_args(["--mode=auto", "--source=aws", "--croquis=true"])
+        self.assertTrue(args3.borders)
+
+    def test_cli_parser_max_dim_flags(self):
+        """Verifica que el parser acepte --max-dim y --resolution-px con enteros."""
+        parser = main.build_parser()
+
+        args1 = parser.parse_args(["--mode=auto", "--source=aws", "--max-dim=2048"])
+        self.assertEqual(args1.max_dim, 2048)
+
+        args2 = parser.parse_args(["--mode=auto", "--source=aws", "--resolution-px=4096"])
+        self.assertEqual(args2.max_dim, 4096)
+
+        args3 = parser.parse_args(["--mode=auto", "--source=aws", "--max-dim=0"])
+        self.assertEqual(args3.max_dim, 0)
+
+        args4 = parser.parse_args(["--mode=auto", "--source=aws"])
+        self.assertIsNone(args4.max_dim)
+
+    def test_cli_parser_c16_enhanced_flag(self):
+        """Verifica que el parser acepte --c16-enhanced y --c16-color."""
+        parser = main.build_parser()
+
+        args1 = parser.parse_args(["--mode=auto", "--source=aws", "--c16-enhanced=true"])
+        self.assertTrue(args1.c16_enhanced)
+
+        args2 = parser.parse_args(["--mode=auto", "--source=aws", "--c16-color=false"])
+        self.assertFalse(args2.c16_enhanced)
+
 
 if __name__ == "__main__":
     unittest.main()

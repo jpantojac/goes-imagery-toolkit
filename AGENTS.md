@@ -57,6 +57,8 @@ python app/main.py \
 | `--overwrite` | `--force` | Fuerza la regeneración de productos incluso si ya existen en output/ (`true`/`false`) | `--overwrite=true` |
 | `--family` | `--palette`, `--enhancement` | Familia de realces de color: `"default"` (Oklahoma en C13, WV regional) o `"noaa"` (paletas oficiales goes.noaa.gov) | `--family="noaa"` |
 | `--c16-enhanced` | `--c16-color` | Activa realce convectivo BD a color en Canal 16 en lugar de escala de grises (`true`/`false`) | `--c16-enhanced=true` |
+| `--borders` | `--croquis` | Dibuja los límites político-administrativos (países y departamentos / croquis) (`true`/`false`) | `--croquis=false` |
+| `--max-dim` | `--resolution-px` | Dimensión máxima de la imagen en píxeles (ej. `2048`, `4096`, o `0` para resolución nativa sin compresión) | `--max-dim=2048` |
 
 ## 4. Directrices Finales para el Agente
 - **Códigos ICAO / Topónimos**: Siempre que el usuario provea una ciudad, departamento o código ICAO (ej. SKCG, SKBO, etc.), es tu responsabilidad como Agente traducir ese identificador a sus coordenadas reales para los parámetros `--lat` y `--lon`.

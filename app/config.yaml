@@ -55,6 +55,10 @@ colors:
 plotting:
   resolution_zoomed: 0.2
   resolution_full: 1.5
+  max_dimension: 2048       # Max image dimension in pixels (1024, 2048, 4096, or 0 for uncompressed native)
+  show_borders: true        # Master switch for vector borders / croquis (true/false)
+  show_departments: true    # Department / state boundaries
+  show_countries: true      # International country boundaries
   dpi_default: 100
   max_pixels: 65536
   radius_nautical_miles: 200
