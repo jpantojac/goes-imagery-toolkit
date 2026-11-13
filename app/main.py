@@ -218,7 +218,7 @@ ncFile = None
 fechas_julianas = []
 
 
-def R2BT(radiance: np.ndarray, channel: str) -> np.ndarray:
+def R2BT(radiance: np.ndarray, channel: str, coeffs: Optional[dict] = None) -> np.ndarray:
     """
     Inverts the Planck radiation function to convert spectral radiance into
     calibrated Brightness Temperature (T_B in Celsius) for thermal infrared bands.
@@ -236,6 +236,7 @@ def R2BT(radiance: np.ndarray, channel: str) -> np.ndarray:
         radiance (np.ndarray): Spectral radiance array measured by the ABI sensor
             in mW / (m^2 * sr * cm^-1).
         channel (str): ABI spectral channel identifier (e.g. 'C07', 'C13').
+        coeffs (Optional[dict], optional): Sensor Planck coefficients dictionary.
 
     Returns:
         np.ndarray: Calibrated Brightness Temperature array in degrees Celsius (°C).
@@ -244,25 +245,27 @@ def R2BT(radiance: np.ndarray, channel: str) -> np.ndarray:
         KeyError: If the specified channel is not a supported thermal infrared band.
     """
     BT_COEFFS = {
-    'C07': {'fk1': 607.76,   'fk2': 121.27,  'bc1': 0.50251, 'bc2': 1.00121},
-    'C08': {'fk1': 1349.07,  'fk2': 215.47,  'bc1': 0.44789, 'bc2': 0.99947},
-    'C09': {'fk1': 3334.57,  'fk2': 479.29,  'bc1': 0.37735, 'bc2': 0.99905},
-    'C10': {'fk1': 5191.21,  'fk2': 774.89,  'bc1': 0.28547, 'bc2': 0.99959},
-    'C11': {'fk1': 11896.29, 'fk2': 1788.17, 'bc1': 0.12072, 'bc2': 0.99978},
-    'C12': {'fk1': 8052.82,  'fk2': 1228.61, 'bc1': 0.13377, 'bc2': 0.99979},
-    'C13': {'fk1': 10736.40, 'fk2': 1389.86, 'bc1': 0.13445, 'bc2': 0.99955},
-    'C14': {'fk1': 7776.19,  'fk2': 1111.95, 'bc1': 0.13637, 'bc2': 0.99975},
-    'C15': {'fk1': 6806.27,  'fk2': 992.03,  'bc1': 0.14449, 'bc2': 0.99982},
-    'C16': {'fk1': 5364.31,  'fk2': 829.59,  'bc1': 0.11557, 'bc2': 0.99985},
+        'C07': {'fk1': 200248.0,  'fk2': 3685.87,  'bc1': 0.48985, 'bc2': 0.99931},
+        'C08': {'fk1': 50451.5,   'fk2': 2327.96,  'bc1': 1.71389, 'bc2': 0.99631},
+        'C09': {'fk1': 35620.4,   'fk2': 2072.92,  'bc1': 0.29884, 'bc2': 0.99929},
+        'C10': {'fk1': 30210.0,   'fk2': 1962.16,  'bc1': 0.05458, 'bc2': 0.99986},
+        'C11': {'fk1': 19441.3,   'fk2': 1694.05,  'bc1': 0.13691, 'bc2': 0.99962},
+        'C12': {'fk1': 13519.8,   'fk2': 1500.86,  'bc1': 0.09101, 'bc2': 0.99971},
+        'C13': {'fk1': 10860.4,   'fk2': 1395.19,  'bc1': 0.07481, 'bc2': 0.99975},
+        'C14': {'fk1': 8500.63,   'fk2': 1285.78,  'bc1': 0.21051, 'bc2': 0.99925},
+        'C15': {'fk1': 6489.46,   'fk2': 1175.13,  'bc1': 0.22448, 'bc2': 0.99913},
+        'C16': {'fk1': 5084.62,   'fk2': 1083.35,  'bc1': 0.06004, 'bc2': 0.99975},
     }
 
-    coeffs = BT_COEFFS[channel]
+    if coeffs is None:
+        coeffs = BT_COEFFS[channel]
     fk1 = coeffs['fk1']
     fk2 = coeffs['fk2']
     bc1 = coeffs['bc1']
     bc2 = coeffs['bc2']
-    
-    T = (fk2 / (np.log((fk1 / radiance) + 1)) - bc1) / bc2
+
+    rad_valid = np.maximum(radiance, 1e-4) if np is not None else radiance
+    T = (fk2 / (np.log((fk1 / rad_valid) + 1)) - bc1) / bc2
     TC = T - 273.15
     return TC
 
@@ -301,7 +304,12 @@ def R2BT_WV_visual(rad: np.ndarray, channel: str) -> np.ndarray:
     tb = tmin + (rad_clipped - rmin) * (tmax - tmin) / (rmax - rmin)
     return tb
 
-def R2RT(radiance: np.ndarray, channel: str) -> np.ndarray:
+def R2RT(
+    radiance: np.ndarray,
+    channel: str,
+    d2: float = 1.0,
+    day_julian: Optional[int] = None
+) -> np.ndarray:
     """
     Converts solar spectral radiance into Top-of-Atmosphere (TOA) bidirectional
     reflectance factor (R) with non-linear display gamma enhancement.
@@ -318,6 +326,8 @@ def R2RT(radiance: np.ndarray, channel: str) -> np.ndarray:
         radiance (np.ndarray): Solar radiance measured by the ABI sensor in
             mW / (m^2 * sr * cm^-1).
         channel (str): Reflective channel identifier ('C01' through 'C06').
+        d2 (float, optional): Normalized Sun-Earth distance squared. Defaults to 1.0.
+        day_julian (Optional[int], optional): Day of year for exact astronomical distance.
 
     Returns:
         np.ndarray: Gamma-corrected reflectance array bounded in [0.0, 1.0].
@@ -334,12 +344,17 @@ def R2RT(radiance: np.ndarray, channel: str) -> np.ndarray:
         'C06': 76.0102     # Banda 6, 2.2 µm
     }
 
-    d2 = 0.3  # Distancia Sol-Tierra normalizada (ajuste simplificado)
-    if channel in Esun:
-        ref = (radiance * np.pi * d2) / Esun[channel]
-    else:
+    if channel not in Esun:
         raise ValueError(f"Constante Esun no definida para el canal {channel}")
-    
+
+    if day_julian is not None and np is not None:
+        # Exact astronomical Earth-Sun distance squared
+        d = 1.0 - 0.0167 * np.cos(2.0 * np.pi * (day_julian - 3) / 365.0)
+        dist_sq = float(d ** 2)
+    else:
+        dist_sq = d2
+
+    ref = (radiance * np.pi * dist_sq) / Esun[channel]
     ref = np.maximum(ref, 0.0)
     ref = np.minimum(ref, 1.0)
     ref_gamma = np.sqrt(ref)
@@ -1005,6 +1020,7 @@ def resolve_colormap_and_limits(
     if family is None:
         family = _cfg_get('colors', 'family', 'enhancement_family', default='default')
     norm_family = str(family).strip().lower()
+    c16_color_enabled = bool(_cfg_get('colors', 'c16_color_enhanced', 'c16_enhanced', default=False))
 
     # Dynamic limits per family
     if norm_family == 'noaa':
@@ -1017,7 +1033,10 @@ def resolve_colormap_and_limits(
         elif 11 <= band <= 15:
             clim_min, clim_max = -110.0, 55.0
         else:  # Band 16
-            clim_min, clim_max = -120.0, 50.0
+            if c16_color_enabled:
+                clim_min, clim_max = -110.0, 55.0
+            else:
+                clim_min, clim_max = -120.0, 50.0
     else:
         # Default family limits
         if band <= 6:
@@ -1036,11 +1055,18 @@ def resolve_colormap_and_limits(
         return colors.rainbow, clim_min, clim_max
 
     # Priority lookup candidates
-    candidates = [
+    candidates = []
+    if band == 16 and c16_color_enabled:
+        candidates.extend([
+            os.path.join(colors_dir, norm_family, "ch16_bd.cpt"),
+            os.path.join(colors_dir, "ch16_bd.cpt"),
+            os.path.join(colors_dir, norm_family, "ch13.cpt"),
+        ])
+    candidates.extend([
         os.path.join(colors_dir, norm_family, f"ch{band:02d}.cpt"),
         os.path.join(colors_dir, f"ch{band:02d}_{norm_family}.cpt"),
         os.path.join(colors_dir, f"ch{band:02d}.cpt"),
-    ]
+    ])
 
     for cand in candidates:
         if os.path.exists(cand):
@@ -1231,17 +1257,30 @@ def processImage(
         data = np.array(Image.fromarray(data.astype(np.float32)).resize((new_width, new_height), resample_filter))
     #print(f"Adjusted data shape: {data.shape}")
 
+    planck_coeffs = None
+    if 'planck_fk1' in ncImage.variables:
+        try:
+            planck_coeffs = {
+                'fk1': float(ncImage.variables['planck_fk1'][:]),
+                'fk2': float(ncImage.variables['planck_fk2'][:]),
+                'bc1': float(ncImage.variables['planck_bc1'][:]),
+                'bc2': float(ncImage.variables['planck_bc2'][:]),
+            }
+        except Exception:
+            planck_coeffs = None
+
+    norm_family = str(family if family is not None else _cfg_get('colors', 'family', 'enhancement_family', default='default')).strip().lower()
+
     channel_str = f"C{Band:02d}"
     if Band <= 6:
-        data = R2RT(data, channel_str)
-    elif Band > 7 and Band < 11:
-        data = R2BT_WV_visual(data, channel_str)
+        data = R2RT(data, channel_str, day_julian=dayjulian)
+    elif 8 <= Band <= 10:
+        if norm_family == 'default':
+            data = R2BT_WV_visual(data, channel_str)
+        else:
+            data = R2BT(data, channel_str, coeffs=planck_coeffs)
     else:
-        data = R2BT(data, channel_str)
-
-    #print(f"Sample data values after processing (first 5x5): {data[:5, :5]}")
-    data_stats = [data.min(), data.max(), data.mean(), data.std()]
-    #print(f"Data stats after processing (min, max, mean, stddev): {data_stats}")
+        data = R2BT(data, channel_str, coeffs=planck_coeffs)
 
     ncImage.close()
     ncImage = None
@@ -1666,6 +1705,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=str(_cfg_get('colors', 'family', 'enhancement_family', default='default')),
         help="Colormap enhancement family ('default' or 'noaa'). Defaults to 'default'."
+    )
+    parser.add_argument(
+        '--c16-enhanced', '--c16-color',
+        dest='c16_enhanced',
+        type=lambda x: str(x).lower() in ('true', '1', 'yes'),
+        default=bool(_cfg_get('colors', 'c16_color_enhanced', 'c16_enhanced', default=False)),
+        help='Display Band 16 (CO2) with convective color enhancement instead of grayscale (True/False)'
     )
     return parser
 

@@ -224,14 +224,24 @@ def build_noaa_family(dest_dir=None):
         dest_dir = os.path.join(COLORS_DIR, "noaa")
     os.makedirs(dest_dir, exist_ok=True)
 
-    # CH01 - CH06: Linear solar reflectance (grayscale 0.0 to 1.0)
+    # CH01 - CH06: Calibrated solar reflectance grayscale (0.0 to 1.0)
+    refl_pts = [
+        (0.00, 0, 0, 0),
+        (0.05, 13, 13, 13),
+        (0.15, 38, 38, 38),
+        (0.30, 80, 80, 80),
+        (0.50, 135, 135, 135),
+        (0.70, 185, 185, 185),
+        (0.85, 225, 225, 225),
+        (1.00, 255, 255, 255)
+    ]
     for band in range(1, 7):
-        shutil.copyfile(os.path.join(COLORS_DIR, "grey255.cpt"), os.path.join(dest_dir, f"ch{band:02d}.cpt"))
+        create_interpolated_cpt(refl_pts, f"ch{band:02d}.cpt", target_dir=dest_dir)
 
     # CH07: NOAA Shortwave IR / Fire
     create_interpolated_cpt(NOAA_STOPS_B07, "ch07.cpt", target_dir=dest_dir)
 
-    # CH08 - CH10: NOAA Water Vapor
+    # CH08 - CH10: NOAA Water Vapor (-90°C to +20°C)
     for band in range(8, 11):
         create_interpolated_cpt(NOAA_STOPS_B08_10, f"ch{band:02d}.cpt", target_dir=dest_dir)
 
@@ -239,8 +249,12 @@ def build_noaa_family(dest_dir=None):
     for band in range(11, 16):
         create_interpolated_cpt(NOAA_STOPS_B11_15, f"ch{band:02d}.cpt", target_dir=dest_dir)
 
-    # CH16: NOAA CO2 Longwave
+    # CH16: NOAA CO2 Longwave (Official Inverted Thermal Grayscale)
     create_interpolated_cpt(NOAA_STOPS_B16, "ch16.cpt", target_dir=dest_dir)
+
+    # CH16 BD Enhancement (Convective Color Option for Band 16)
+    create_interpolated_cpt(NOAA_STOPS_B11_15, "ch16_bd.cpt", target_dir=dest_dir)
+    create_interpolated_cpt(NOAA_STOPS_B11_15, "ch16_bd.cpt", target_dir=COLORS_DIR)
 
     # Also mirror with suffix into root colors directory (e.g. ch13_noaa.cpt) for hybrid lookups
     for band in range(1, 17):

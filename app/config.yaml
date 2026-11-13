@@ -47,6 +47,7 @@ shapes:
 
 colors:
   family: "default"            # Options: "default" (Oklahoma C13 + Regional), "noaa" (Official NOAA/NHC)
+  c16_color_enhanced: false    # If true, applies convective BD color curve to Band 16 instead of thermal grayscale
   visible: "grey255.cpt"
   infrared: "thermal.cpt"
   water_vapor: "WV.cpt"

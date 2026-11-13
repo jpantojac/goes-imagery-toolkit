@@ -204,6 +204,7 @@ python app/main.py --mode="auto" --source="aws" --label=true
 | `--watermark` | `--institution`, `--institucion` | `str` | `config.yaml` | Custom label or institution text rendered on bottom bar. |
 | `--overwrite` | `--force` | `bool` | `False` | Force re-generation of products even if `.png` and `.tif` already exist (`true`/`false`). |
 | `--family` | `--palette`, `--enhancement` | `str` | `default` | Colormap enhancement family: `default` (Oklahoma on C13, WV on C09) or `noaa` (official goes.noaa.gov full-disk palettes). |
+| `--c16-enhanced` | `--c16-color` | `bool` | `False` | Display Band 16 (CO2) with convective BD color enhancement instead of thermal grayscale (`true`/`false`). |
 
 ---
 

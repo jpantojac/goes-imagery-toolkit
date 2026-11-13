@@ -257,6 +257,29 @@ class TestCalibrationAndGeometry(unittest.TestCase):
         args3 = parser.parse_args(["--mode=auto", "--source=aws", "--enhancement=noaa"])
         self.assertEqual(args3.family, "noaa")
 
+    def test_r2bt_water_vapor_physical_range(self):
+        """Verifica que R2BT con los coeficientes ABI reales de C09 produzca temperaturas físicas realistas."""
+        if np is None:
+            raise unittest.SkipTest("NumPy no está instalado en este entorno.")
+        # Radiancias típicas de vapor de agua (~0.5 para nubes frías, ~10 para humedad media, ~30 para aire seco)
+        rad_wv = np.array([0.5, 10.0, 30.0])
+        tb_wv = main.R2BT(rad_wv, 'C09')
+        # -88°C (nubes frías) < -20°C (humedad) < +15°C (aire seco)
+        self.assertTrue(tb_wv[0] < -80.0)
+        self.assertTrue(-35.0 < tb_wv[1] < -10.0)
+        self.assertTrue(tb_wv[2] > 0.0)
+        self.assertTrue(tb_wv[0] < tb_wv[1] < tb_wv[2])
+
+    def test_r2rt_astronomical_distance_scaling(self):
+        """Verifica que la reflectancia visible use d2=1.0 para contraste natural brillante."""
+        if np is None:
+            raise unittest.SkipTest("NumPy no está instalado en este entorno.")
+        # Radiancia de nube muy brillante (400 mW/(m²·sr·cm⁻¹))
+        rad_cloud = np.array([400.0])
+        ref_gamma = main.R2RT(rad_cloud, 'C02', d2=1.0)
+        # Debe ser brillante (> 0.8) y no un gris oscuro (< 0.5)
+        self.assertGreater(ref_gamma[0], 0.8)
+
 
 if __name__ == "__main__":
     unittest.main()
