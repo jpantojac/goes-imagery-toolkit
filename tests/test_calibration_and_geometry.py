@@ -1,7 +1,6 @@
 import unittest
 import os
 import sys
-import numpy as np
 
 # Asegurar que 'app' esté en el sys.path
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -9,6 +8,11 @@ PROJECT_ROOT = os.path.dirname(TESTS_DIR)
 APP_DIR = os.path.join(PROJECT_ROOT, "app")
 if APP_DIR not in sys.path:
     sys.path.insert(0, APP_DIR)
+
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 import main
 
@@ -21,6 +25,8 @@ class TestCalibrationAndGeometry(unittest.TestCase):
 
     def test_r2bt_infrared_c13_conversion(self):
         """Verifica la inversión de la función de Planck para la banda infrarroja limpia C13 (10.35 µm)."""
+        if np is None:
+            raise unittest.SkipTest("NumPy no está instalado en este entorno.")
         # Radiancia típica (~50 - 100 mW/(m²·sr·cm⁻¹))
         rad_sample = np.array([30.0, 70.0, 110.0])
         tb = main.R2BT(rad_sample, 'C13')
@@ -34,6 +40,8 @@ class TestCalibrationAndGeometry(unittest.TestCase):
 
     def test_r2rt_visible_reflectance_and_gamma(self):
         """Verifica el cálculo de reflectancia con constante solar Esun y corrección gamma para C02 (0.64 µm)."""
+        if np is None:
+            raise unittest.SkipTest("NumPy no está instalado en este entorno.")
         rad_sample = np.array([0.0, 50.0, 200.0])
         ref = main.R2RT(rad_sample, 'C02')
 
@@ -46,6 +54,8 @@ class TestCalibrationAndGeometry(unittest.TestCase):
 
     def test_r2bt_unsupported_channel_raises_error(self):
         """Verifica que un canal inexistente o no térmico lance KeyError en R2BT."""
+        if np is None:
+            raise unittest.SkipTest("NumPy no está instalado en este entorno.")
         with self.assertRaises(KeyError):
             main.R2BT(np.array([50.0]), 'C02')
 
@@ -96,6 +106,60 @@ class TestCalibrationAndGeometry(unittest.TestCase):
         # Simetría aproximada
         self.assertAlmostEqual(north - lat, lat - south, places=5)
         self.assertAlmostEqual(east - lon, lon - west, places=5)
+
+    def test_cli_parser_english_flags(self):
+        """Verifica que el parser acepte los parámetros en inglés (--mode, --source, --date, --hours, --minutes)."""
+        parser = main.build_parser()
+        args = parser.parse_args([
+            "--mode=manual",
+            "--source=aws",
+            "--date=20240929",
+            "--hours=11,12",
+            "--minutes=00,30",
+            "--lat=4.711",
+            "--lon=-74.072",
+            "--label=true",
+            "--bullseye=false",
+            "--watermark=MyProject"
+        ])
+        self.assertEqual(args.mode, "manual")
+        self.assertEqual(args.source, "aws")
+        self.assertEqual(args.date, "20240929")
+        self.assertEqual(args.hours, "11,12")
+        self.assertEqual(args.minutes, "00,30")
+        self.assertEqual(args.lat, "4.711")
+        self.assertEqual(args.lon, "-74.072")
+        self.assertTrue(args.label)
+        self.assertFalse(args.bullseye)
+        self.assertEqual(args.watermark, "MyProject")
+
+    def test_cli_parser_spanish_aliases(self):
+        """Verifica compatibilidad hacia atrás con alias en español (--tipo, --fuente, --fecha, --horas, --minutos)."""
+        parser = main.build_parser()
+        args = parser.parse_args([
+            "--tipo=manual",
+            "--fuente=aws",
+            "--fecha=20240929",
+            "--horas=11,12",
+            "--minutos=00,30",
+            "--institucion=MyProject"
+        ])
+        self.assertEqual(args.mode, "manual")
+        self.assertEqual(args.source, "aws")
+        self.assertEqual(args.date, "20240929")
+        self.assertEqual(args.hours, "11,12")
+        self.assertEqual(args.minutes, "00,30")
+        self.assertEqual(args.watermark, "MyProject")
+
+    def test_get_band_extraction(self):
+        """Verifica la extracción del número de banda para archivos G16 y G19."""
+        f_g19 = "OR_ABI-L1b-RadF-M6C13_G19_s20263160150205_e20263160159527_c20263160159575.nc"
+        self.assertEqual(main.get_band(f_g19, True), 13)
+        self.assertEqual(main.get_band(f_g19, False), "13")
+
+        f_g16 = "OR_ABI-L1b-RadF-M6C01_G16_s20242731200210_e20242731209518_c20242731209567.nc"
+        self.assertEqual(main.get_band(f_g16, True), 1)
+        self.assertEqual(main.get_band(f_g16, False), "01")
 
 
 if __name__ == "__main__":

@@ -18,4 +18,4 @@ elif [ "$rounded_minute" -eq 0 ]; then
 fi
 
 # Ejecutar el script de Python con la hora ajustada
-python3 main.py --tipo="auto" --fuente="aws" --fecha="$current_date" --horas="$current_hour" --minutos="$rounded_minute"
+python3 main.py --mode="auto" --source="aws" --date="$current_date" --hours="$current_hour" --minutes="$rounded_minute"

@@ -1,12 +1,41 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+"""
+GOES-16/19 Advanced Baseline Imager (ABI) Imagery Toolkit
+==========================================================
 
-#
-# File: main.py
-# Author: Julian Pantoja Clavijo <julianpc.dev@gmail.com>
-# Description: Script para procesamiento, calibración y generación de imágenes satelitales GOES-16/19
-# License: MIT
-#
+An academic and operational Earth Observation pipeline for automated data ingestion,
+radiometric calibration, spatial reprojection, and cartographic visualization of
+NOAA GOES-R series (GOES-16 and GOES-19) Level 1b Radiance (RadF) products.
+
+Physical Principles & Calibrations Implemented:
+-----------------------------------------------
+1. Inversion of Planck Radiation Equation (Bands 07 - 16):
+   Converts measured spectral radiances (mW / [m^2 * sr * (cm^-1)]) into effective
+   Brightness Temperatures (T_B in Celsius) using sensor-specific calibration
+   coefficients (fk1, fk2, bc1, bc2) defined in the NOAA ABI PUG Volume 3:
+     T = fk2 / ln(fk1 / L_lambda + 1)
+     T_B = [(T - bc1) / bc2] - 273.15
+
+2. Top-of-Atmosphere (TOA) Solar Reflectance (Bands 01 - 06):
+   Calibrates visible and near-infrared channels using solar spectral irradiance constants
+   (Esun), normalized Sun-Earth distance, and gamma square-root enhancement:
+     R = (pi * L_lambda * d^2) / Esun
+     R_gamma = sqrt(clip(R, 0, 1))
+
+3. Geostationary to Equirectangular (WGS84 EPSG:4326) Reprojection:
+   High-performance spatial remapping via GDAL coordinate transformations and
+   perspective projection height parameters.
+
+4. Cartographic Composition & GIS Export:
+   - High-resolution PNGs with scientific CPT colormaps and cartographic boundaries.
+   - ESRI Worldfiles (.pgw) encoding affine 6-parameter pixel transformations.
+   - Calibrated 16-bit GeoTIFF rasters (T_B * 100 scaled integers) with LZW compression.
+
+Author: Julian Pantoja Clavijo <julianpc.dev@gmail.com>
+License: MIT
+Repository: https://github.com/jpantojac/goes-imagery-toolkit
+"""
 import os
 import sys
 import warnings
@@ -52,27 +81,58 @@ try:
     from netCDF4 import Dataset
 except (ImportError, ModuleNotFoundError):
     Dataset = None
-import numpy as np
-import matplotlib.pyplot as plt
-from libs.cpt_convert import loadCPT
-from matplotlib.colors import LinearSegmentedColormap
-from matplotlib.patches import Rectangle
+try:
+    import numpy as np
+except (ImportError, ModuleNotFoundError):
+    np = None
+
+try:
+    import matplotlib
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LinearSegmentedColormap
+    from matplotlib.patches import Rectangle
+except (ImportError, ModuleNotFoundError):
+    matplotlib = None
+    plt = None
+    LinearSegmentedColormap = None
+    Rectangle = None
+
+try:
+    from libs.cpt_convert import loadCPT
+except (ImportError, ModuleNotFoundError):
+    loadCPT = None
+
 try:
     import colors.colors as colors
 except (ImportError, ModuleNotFoundError):
     colors = None
+
 import time
-import requests
-from bs4 import BeautifulSoup
+
+try:
+    import requests
+    from bs4 import BeautifulSoup
+except (ImportError, ModuleNotFoundError):
+    requests = None
+    BeautifulSoup = None
+
 import urllib3
 from typing import Optional, List, Union
-from PIL import Image
-import matplotlib
+
+try:
+    from PIL import Image
+except (ImportError, ModuleNotFoundError):
+    Image = None
+
 try:
     from metpy.plots import colortables
 except (ImportError, ModuleNotFoundError):
     colortables = None
-import yaml
+
+try:
+    import yaml
+except (ImportError, ModuleNotFoundError):
+    yaml = None
 
 
 
@@ -84,42 +144,68 @@ logging.basicConfig(
 )
 
 
-# Cargar configuración desde YAML
-def load_config(config_path=None):
+# Load project configuration from YAML
+def load_config(config_path: Optional[str] = None) -> dict:
     """
-    Carga la configuración desde un archivo YAML.
-    
+    Loads project configuration from a YAML file.
+
     Args:
-        config_path (str, optional): Ruta al archivo de configuración.
+        config_path (Optional[str], optional): Path to the configuration YAML file.
+            If None, defaults to 'config.yaml' located in the script directory.
 
     Returns:
-        dict: Diccionario con los valores de configuración.
+        dict: Parsed configuration dictionary containing runtime settings,
+            paths, spectral channel definitions, and GIS parameters.
     """
+    if yaml is None:
+        return {}
     if config_path is None:
         cand_path = os.path.join(SCRIPT_DIR, "config.yaml")
         config_path = cand_path if os.path.exists(cand_path) else "config.yaml"
     try:
         with open(config_path, 'r', encoding='utf-8') as file:
-            return yaml.safe_load(file)
+            return yaml.safe_load(file) or {}
     except FileNotFoundError:
-        raise FileNotFoundError(f"No se encontró el archivo de configuración: {config_path}")
+        return {}
     except Exception as e:
-        raise RuntimeError(f"Error al leer el archivo de configuración: {e}")
+        logging.warning(f"Error reading configuration file: {e}")
+        return {}
 
 config = load_config()
 
-# Configuraciones generales
+def _cfg_get(section: str, *keys: str, default=None):
+    """
+    Safely retrieves a configuration key from a section, supporting both
+    standard English keys and legacy Spanish aliases for backward compatibility.
+
+    Args:
+        section (str): Name of the configuration section in config.yaml.
+        *keys (str): Candidate keys to query sequentially.
+        default (Any, optional): Fallback value if no candidate key matches.
+
+    Returns:
+        Any: Value of the first matched key, or default if none exist.
+    """
+    sec = config.get(section, {}) if isinstance(config, dict) else {}
+    for k in keys:
+        if k in sec:
+            return sec[k]
+    return default
+
+# Configuraciones generales / General settings
 basePath = config.get('paths', {}).get('base', '')
 if not basePath or basePath.strip() in [".", ""]:
     basePath = SCRIPT_DIR
 
-institucion         = config['general']['institucion']
-generateTiff        = config['general']['generateTiff']
-channels            = config['satelite']['channels']
-channelsIdeam       = config['satelite']['channels_ideam']
-archivo_registro    = config['general']['archivo_registro']
-base_url            = config['satelite']['base_url']
-satellite           = config['satelite']['satellite']
+institucion         = _cfg_get('general', 'institution', 'institucion', default='Open Satellite Project')
+generateTiff        = _cfg_get('general', 'generate_tiff', 'generateTiff', default=True)
+archivo_registro    = _cfg_get('general', 'registry_file', 'archivo_registro', default='ultima_descarga.txt')
+
+sat_section         = config.get('satellite', config.get('satelite', {}))
+channels            = sat_section.get('channels', ["01", "09", "13"])
+channelsIdeam       = sat_section.get('channels_ideam', ["C01", "C09", "C13"])
+base_url            = sat_section.get('base_url', "https://bart.ideam.gov.co/ospa/sensores/pasivos/satelite/GOES19/RAW/")
+satellite           = sat_section.get('satellite', "G19")
 
 # Globales
 dsatellite = satellite.replace('G','goes')
@@ -129,14 +215,28 @@ fechas_julianas = []
 
 def R2BT(radiance: np.ndarray, channel: str) -> np.ndarray:
     """
-    Convierte radiancia a temperatura de brillo (°C) para bandas térmicas (ej. C13).
+    Inverts the Planck radiation function to convert spectral radiance into
+    calibrated Brightness Temperature (T_B in Celsius) for thermal infrared bands.
+
+    Mathematical Formulation:
+        1. Effective Planckian temperature in Kelvin:
+           T = fk2 / (ln(fk1 / radiance + 1))
+        2. Linear spectral response correction and Celsius conversion:
+           T_B = [(T - bc1) / bc2] - 273.15
+
+    Coefficients (fk1, fk2, bc1, bc2) are derived from the NOAA ABI Level 1b
+    Product Definition and Users' Guide (PUG) Volume 3.
 
     Args:
-        radiance (np.ndarray): Arreglo de radiancia del sensor GOES.
-        channel (str): Canal del sensor (por ejemplo, 'C13').
+        radiance (np.ndarray): Spectral radiance array measured by the ABI sensor
+            in mW / (m^2 * sr * cm^-1).
+        channel (str): ABI spectral channel identifier (e.g. 'C07', 'C13').
 
     Returns:
-        np.ndarray: Temperatura de brillo en grados Celsius.
+        np.ndarray: Calibrated Brightness Temperature array in degrees Celsius (°C).
+
+    Raises:
+        KeyError: If the specified channel is not a supported thermal infrared band.
     """
     BT_COEFFS = {
     'C07': {'fk1': 607.76,   'fk2': 121.27,  'bc1': 0.50251, 'bc2': 1.00121},
@@ -161,9 +261,24 @@ def R2BT(radiance: np.ndarray, channel: str) -> np.ndarray:
     TC = T - 273.15
     return TC
 
-def R2BT_WV_visual(rad, channel):
+def R2BT_WV_visual(rad: np.ndarray, channel: str) -> np.ndarray:
     """
-    Normalización visual para las bandas de Vapor de Agua.
+    Applies dynamic range radiometric normalization for tropospheric water vapor bands
+    (ABI Bands 08, 09, 10).
+
+    Normalizes radiances across empirical meteorological bounds and scales them
+    into an effective temperature range [-80°C, -20°C] for optimal visual contrast
+    of synoptic moisture structures, jet streams, and atmospheric vorticity.
+
+    Args:
+        rad (np.ndarray): Spectral radiance array for water vapor channels.
+        channel (str): ABI channel identifier ('C08', 'C09', or 'C10').
+
+    Returns:
+        np.ndarray: Normalized brightness temperature proxy for visual cartography.
+
+    Raises:
+        ValueError: If the channel is not an ABI water vapor channel.
     """
     if channel == 'C08':
         rmin, rmax = 0.5, 25.0
@@ -183,15 +298,27 @@ def R2BT_WV_visual(rad, channel):
 
 def R2RT(radiance: np.ndarray, channel: str) -> np.ndarray:
     """
-    Convierte radiancia a reflectancia para bandas visibles/infrarrojo cercano (ej. C02),
-    con corrección gamma.
+    Converts solar spectral radiance into Top-of-Atmosphere (TOA) bidirectional
+    reflectance factor (R) with non-linear display gamma enhancement.
+
+    Mathematical Formulation:
+        1. Reflectance factor:
+           R = (pi * radiance * d^2) / Esun
+        2. Bounds clipping:
+           R_clipped = clip(R, 0.0, 1.0)
+        3. Gamma square-root transformation (gamma = 0.5):
+           R_gamma = sqrt(R_clipped)
 
     Args:
-        radiance (np.ndarray): Datos de radiancia del sensor GOES.
-        channel (str): Canal correspondiente a la banda visible (por ejemplo, 'C02').
+        radiance (np.ndarray): Solar radiance measured by the ABI sensor in
+            mW / (m^2 * sr * cm^-1).
+        channel (str): Reflective channel identifier ('C01' through 'C06').
 
     Returns:
-        np.ndarray: Reflectancia ajustada con corrección gamma (0..1).
+        np.ndarray: Gamma-corrected reflectance array bounded in [0.0, 1.0].
+
+    Raises:
+        ValueError: If Esun constant is not defined for the requested channel.
     """
     Esun = {
         'C01': 2041.962,   # Banda 1, 0.47 µm
@@ -213,21 +340,21 @@ def R2RT(radiance: np.ndarray, channel: str) -> np.ndarray:
     ref_gamma = np.sqrt(ref)
     return ref_gamma 
 
-def create_folder(ruta, clean=False):
+def create_folder(ruta: str, clean: bool = False) -> bool:
     """
-    Crea una carpeta en la ruta especificada o limpia su contenido si ya existe.
+    Ensures a directory exists on the filesystem, optionally purging existing contents.
 
     Args:
-        ruta (str): Ruta donde se creará la carpeta.
-        clean (bool, optional): Si es True, elimina el contenido si la carpeta ya existe. Por defecto es False.
+        ruta (str): Target directory path.
+        clean (bool, optional): If True and directory exists, removes all files
+            and subdirectories inside it. Defaults to False.
 
     Returns:
-        bool: True si la operación fue exitosa, False si ocurrió un error.
+        bool: True if directory is prepared successfully, False on error.
     """
     try:
         if os.path.exists(ruta):
             if clean:
-                # Eliminar contenido de la carpeta
                 for filename in os.listdir(ruta):
                     file_path = os.path.join(ruta, filename)
                     if os.path.isfile(file_path) or os.path.islink(file_path):
@@ -236,7 +363,6 @@ def create_folder(ruta, clean=False):
                         shutil.rmtree(file_path)
                 logging.debug("Contenido de la carpeta eliminado: %s", ruta)
         else:
-            # Crear carpeta si no existe
             os.makedirs(ruta)
             logging.debug("Carpeta creada: %s", ruta)
         return True
@@ -244,12 +370,12 @@ def create_folder(ruta, clean=False):
         logging.error("Error al gestionar carpeta %s: %s", ruta, e)
         return False
 
-def prepare_folders(dates):
+def prepare_folders(dates: List[str]) -> None:
     """
-    Prepara las carpetas de entrada y salida para las fechas especificadas.
+    Prepares input and output directory structures indexed by Julian day (day of year).
 
     Args:
-        dates (List[str]): Lista de fechas en formato 'YYYYMMDD'.
+        dates (List[str]): List of date strings in 'YYYYMMDD' format.
     """
     global fechas_julianas
     #global basePath 
@@ -264,98 +390,138 @@ def prepare_folders(dates):
         create_folder(os.path.join(basePath,config['paths']['input'],fecha),False)    
         create_folder(os.path.join(basePath,config['paths']['output'],fecha),False)    
 
-def download(dates,hours,minutes):
+def download(dates: List[str], hours: List[str], minutes: List[str]) -> List[str]:
     """
-    Descarga archivos de radiancia GOES para fechas y horarios específicos.
+    Retrieves NOAA GOES Level 1b Radiance (ABI-L1b-RadF) NetCDF files from AWS S3.
+
+    Queries hourly cloud storage prefixes with minute-level precision, enforcing
+    temporal bounds to prevent S3 prefix overshoot. Automatically falls back
+    to pre-existing local files if already downloaded in previous sessions.
 
     Args:
-        dates (List[str]): Lista de fechas en formato 'YYYYMMDD'.
-        hours (List[str]): Lista de horas en formato 'HH'.
-        minutes (List[str]): Lista de minutos en formato 'MM'.
+        dates (List[str]): List of target observation dates in 'YYYYMMDD' format.
+        hours (List[str]): List of UTC target hours in 'HH' format (00-23).
+        minutes (List[str]): List of target minutes in 'MM' format (00-59).
 
     Returns:
-        List[str]: Lista de rutas de archivos descargados.
+        List[str]: List of filesystem paths to the downloaded or resolved NetCDF files.
     """
     fulllist = []
-    # Iterar sobre los valores del array
     for date in dates:
         for hour in hours:
             for minute in minutes:
-                #print('entra:' +date + ' ' + hour + ' ' + minute)
                 fecha_hora = datetime.strptime(date+"-"+hour+minute+'00', '%Y%m%d-%H%M%S')
-                # Sumar 5 minutos
-                nueva_fecha_hora = fecha_hora + timedelta(minutes=10)
-                dateend = nueva_fecha_hora.strftime('%Y%m%d-%H%M%S')
-                #descargar a la carpeta juliana
+                # Stay strictly within the requested slot with 00 seconds so GOES.download
+                # does not overshoot by 1 hour due to second-precision comparisons.
+                nueva_fecha_hora = min(
+                    fecha_hora + timedelta(minutes=5),
+                    fecha_hora.replace(minute=55, second=0)
+                )
+                dateend = nueva_fecha_hora.strftime('%Y%m%d-%H%M00')
                 fecha_dt = datetime.strptime(date, "%Y%m%d")
                 fecha_juliana = fecha_dt.strftime("%j")
                 output = (os.path.join(basePath, config['paths']['input'], fecha_juliana).rstrip(os.sep)+ os.sep)
-                #print(output)
-                #print(date+"-"+hour+minute+'00')
-                #print(dateend)
-                flist = GOES.download(dsatellite, 'ABI-L1b-RadF',
-                            DateTimeIni = date+"-"+hour+minute+'00', 
-                            DateTimeFin = dateend, 
-                            channel = channels, 
-                            path_out=output)
-                fulllist += flist
+                flist = []
+                try:
+                    flist = GOES.download(dsatellite, 'ABI-L1b-RadF',
+                                DateTimeIni = date+"-"+hour+minute+'00', 
+                                DateTimeFin = dateend, 
+                                channel = channels, 
+                                path_out=output)
+                except FileNotFoundError as fnf_err:
+                    logging.warning(f"S3 remote directory not found for {date} {hour}:{minute} UTC: {fnf_err}")
+                except Exception as dl_err:
+                    logging.warning(f"Error querying GOES data for {date} {hour}:{minute} UTC: {dl_err}")
+
+                if flist:
+                    fulllist += flist
+                elif os.path.exists(output):
+                    # Fallback: check if files were already downloaded in this slot
+                    prefix_match = f"s{fecha_dt.strftime('%Y%j')}{hour}{minute}"
+                    existing = [
+                        os.path.join(output, f) for f in os.listdir(output)
+                        if f.endswith('.nc') and prefix_match in f
+                    ]
+                    if existing:
+                        logging.info(f"Using {len(existing)} pre-downloaded files from {output} for {date} {hour}:{minute}")
+                        fulllist += existing
     return fulllist                
 
-def auto_date(fuente, label, watermark=None):
+def auto_date(source: str, label: bool = False, watermark: Optional[str] = None) -> None:
     """
-    Ejecuta la generación automática de imágenes satelitales según la fuente especificada.
+    Executes near-real-time automated observation retrieval and product generation.
 
     Args:
-        fuente (str): Fuente de los datos ('aws' o 'ideam').
-        label (bool): Si es True, añade etiquetas e información adicional en la imagen.
-        watermark (Optional[str]): Texto de marca de agua o institución opcional.
+        source (str): Satellite data source identifier ('aws' or 'ideam').
+        label (bool, optional): If True, renders title bar, colorbar, and metadata. Defaults to False.
+        watermark (Optional[str], optional): Custom institution or attribution watermark. Defaults to None.
     """
-    logging.info("Auto generation")
-    if fuente == 'aws':
+    logging.info("Automated generation mode started")
+    if source == 'aws':
         source_AWS(label, watermark=watermark)
-    elif fuente == "ideam":
+    elif source == "ideam":
         source_IDEAM(label, watermark=watermark)
     else:
-        logging.info('Fuente no encontrada. aws|ideam')
+        logging.error(f"Unknown data source: {source}. Supported: aws | ideam")
 
-# Función para descargar el archivo
-def donwload_file(url, nombre_archivo):
+def download_file(url: str, nombre_archivo: str) -> None:
     """
-    Descarga un archivo desde una URL y lo guarda en la carpeta correspondiente.
+    Downloads a remote binary file via HTTP/HTTPS into the corresponding Julian day folder.
 
     Args:
-        url (str): URL del archivo a descargar.
-        nombre_archivo (str): Nombre del archivo a guardar.
+        url (str): Remote URL endpoint.
+        nombre_archivo (str): Target filename to persist locally.
     """
-    logging.info(f"Descargando {nombre_archivo} desde {url}...")
+    logging.info(f"Downloading {nombre_archivo} from {url}...")
     response = requests.get(url, verify=False)
     Start = (nombre_archivo[nombre_archivo.find("_s")+2:nombre_archivo.find("_e")])
 
     dayjulianstring = Start[4:7] 
-    create_folder(os.path.join(basePath,config['paths']['input'],dayjulianstring),False)   
-    directorio_descargas = os.path.join(basePath,config['paths']['input'],dayjulianstring)
+    create_folder(os.path.join(basePath, config['paths']['input'], dayjulianstring), False)   
+    directorio_descargas = os.path.join(basePath, config['paths']['input'], dayjulianstring)
     with open(os.path.join(directorio_descargas, nombre_archivo), 'wb') as f:
         f.write(response.content)
-    logging.info(f"Descarga completada: {nombre_archivo}")
+    logging.info(f"Download complete: {nombre_archivo}")
 
-# Función para escribir el archivo de registro de la última descarga
-def write_latest_downloaded(ultima_descarga):
+# Alias for backward compatibility
+donwload_file = download_file
+
+def write_latest_downloaded(ultima_descarga: dict) -> None:
     """
-    Escribe en un archivo de texto el registro de las últimas descargas por canal.
+    Persists the state registry of the most recent downloaded files per channel.
 
     Args:
-        ultima_descarga (dict): Diccionario con el nombre del canal como clave y el nombre del archivo descargado como valor.
+        ultima_descarga (dict): Key-value mapping of channel name to latest filename.
     """
     with open(archivo_registro, 'w') as f:
         for canal, archivo in ultima_descarga.items():
             f.write(f"{canal}={archivo}\n")
 
-def source_IDEAM(label):
+def read_latest_downloaded() -> dict:
     """
-    Descarga los archivos más recientes disponibles desde la fuente IDEAM y procesa las imágenes.
+    Reads the state registry tracking the latest downloaded files per channel.
+
+    Returns:
+        dict: Dictionary mapping channel names to their latest downloaded filename.
+    """
+    if os.path.exists(archivo_registro):
+        with open(archivo_registro, 'r') as f:
+            resultado = {}
+            for line in f:
+                line = line.strip()
+                if '=' in line:
+                    clave, valor = line.split('=', 1)
+                    resultado[clave] = valor
+            return resultado
+    return {}
+
+def source_IDEAM(label: bool = False, watermark: Optional[str] = None) -> None:
+    """
+    Scrapes and retrieves the most recent Level 1b imagery from the IDEAM regional HTTP archive.
 
     Args:
-        label (bool): Si es True, añade etiquetas e información adicional en la imagen.
+        label (bool, optional): If True, renders metadata, colorbar, and title banner. Defaults to False.
+        watermark (Optional[str], optional): Custom watermark or attribution string. Defaults to None.
     """
     # Obtener el contenido de la página
     response = requests.get(base_url, verify=False)
@@ -420,21 +586,21 @@ def read_latest_downloaded():
             return resultado
     return {}
 
-def source_AWS(label, watermark=None):
+def source_AWS(label: bool = False, watermark: Optional[str] = None) -> None:
     """
-    Descarga y procesa datos satelitales GOES desde AWS, correspondientes a 10 minutos antes del tiempo actual.
+    Retrieves and processes the most recent GOES observation slot from NOAA's public AWS S3 bucket.
+
+    Computes the timestamp of the latest available 10-minute scan, creates required directories,
+    downloads the active spectral channels, and triggers image/raster production.
 
     Args:
-        label (bool): Si es True, añade etiquetas e información adicional en la imagen.
-        watermark (Optional[str]): Texto de marca de agua o institución opcional.
+        label (bool, optional): If True, renders metadata, colorbar, and title banner. Defaults to False.
+        watermark (Optional[str], optional): Custom watermark or attribution string. Defaults to None.
     """
-    #logging.info(label)
     utc = time.gmtime()
     tenMinutesAgo = time.time() - ( 60 * 10 )
     utcTenMinutesAgo = time.gmtime(tenMinutesAgo)
-    # Obtener los minutos de utcTenMinutesAgo
     current_minutes = utcTenMinutesAgo.tm_min
-    # Redondear hacia abajo al múltiplo de 10 más cercano
     rounded_minutes = (current_minutes // 10) * 10
 
     utcTenMinutesAgoRounded = time.struct_time((utcTenMinutesAgo.tm_year,
@@ -447,7 +613,6 @@ def source_AWS(label, watermark=None):
                                             utcTenMinutesAgo.tm_yday,
                                             utcTenMinutesAgo.tm_isdst))
 
-
     year = time.strftime('%Y',utcTenMinutesAgoRounded)
     month = time.strftime('%m',utcTenMinutesAgoRounded) 
     day = time.strftime('%d',utcTenMinutesAgoRounded)
@@ -456,7 +621,6 @@ def source_AWS(label, watermark=None):
     julian = time.strftime('%j',utcTenMinutesAgoRounded) 
     logging.info(time.strftime('%m/%d/%Y, %H:%M:%S',utcTenMinutesAgoRounded))
 
-    #print(year+month+day+' '+hour+' '+minute)
     dates=[]
     hours=[]
     minutes=[]
@@ -466,42 +630,67 @@ def source_AWS(label, watermark=None):
     prepare_folders(dates)
     flist = download(dates,hours,minutes)
 
+    if not flist:
+        logging.warning("No files were downloaded. The requested scan may not yet be published on NOAA S3.")
+        return
+
     for aFile in flist:
         processImage(aFile, label=label, watermark=watermark)
 
-def manual_date(dates, hours, minutes, lat, lon, label, bullseye=True, watermark=None):
+def manual_date(
+    dates: List[str],
+    hours: List[str],
+    minutes: List[str],
+    lat: Optional[Union[float, List[float]]] = None,
+    lon: Optional[Union[float, List[float]]] = None,
+    label: bool = False,
+    bullseye: bool = True,
+    watermark: Optional[str] = None
+) -> None:
     """
-    Ejecuta la generación manual de imágenes satelitales para fechas y horarios específicos.
+    Orchestrates manual, targeted satellite imagery generation for specific timestamps and coordinates.
 
     Args:
-        dates (List[str]): Lista de fechas en formato 'YYYYMMDD'.
-        hours (List[str]): Lista de horas en formato 'HH'.
-        minutes (List[str]): Lista de minutos en formato 'MM'.
-        lat (Union[float, List[float], None]): Latitud(es) del marcador a resaltar.
-        lon (Union[float, List[float], None]): Longitud(es) del marcador a resaltar.
-        label (bool): Si es True, muestra etiquetas e información adicional en la imagen.
-        watermark (Optional[str]): Texto de marca de agua o institución opcional.
+        dates (List[str]): List of dates in 'YYYYMMDD' format.
+        hours (List[str]): List of UTC hours in 'HH' format (00-23).
+        minutes (List[str]): List of minutes in 'MM' format (00-59).
+        lat (Optional[Union[float, List[float]]]): Target latitude(s) for visual emphasis.
+        lon (Optional[Union[float, List[float]]]): Target longitude(s) for visual emphasis.
+        label (bool, optional): If True, renders title bar, colorbar, and metadata. Defaults to False.
+        bullseye (bool, optional): If True, renders concentric nautical mile distance rings.
+            If False, plots numbered waypoints (P1, P2, ...). Defaults to True.
+        watermark (Optional[str], optional): Custom watermark or attribution string. Defaults to None.
     """
     global fechas_julianas
     prepare_folders(dates)
     flist = download(dates,hours,minutes)
+
+    if not flist:
+        logging.warning("No files were downloaded for the specified dates and times.")
+        return
           
     for aFile in flist:
         processImage(aFile, lat, lon, label=label, bullseye=bullseye, watermark=watermark)
 
-def get_band(nombre_archivo,isString):
+def get_band(nombre_archivo: str, isString: bool) -> Union[int, str, None]:
     """
-    Extrae el número de banda desde el nombre del archivo.
+    Extracts the ABI spectral channel identifier from a standard GOES NetCDF filename.
+
+    Supports NOAA GOES-R naming conventions across all satellites (G16, G17, G18, G19)
+    and scan modes (M3, M4, M6).
 
     Args:
-        nombre_archivo (str): Nombre del archivo satelital.
-        isString (bool): Si es True, devuelve el número como entero; de lo contrario, como cadena.
+        nombre_archivo (str): GOES NetCDF filename.
+        isString (bool): If True, returns channel number as integer.
+            If False, returns 2-character zero-padded string (e.g. '01', '13').
 
     Returns:
-        Union[int, str, None]: Número de banda, o None si no se puede extraer.
+        Union[int, str, None]: Extracted channel identifier, or None if extraction fails.
     """
     inicio = nombre_archivo.find("M4C") if "M4C" in nombre_archivo else nombre_archivo.find("M6C")
-    fin = nombre_archivo.find("_"+satellite)
+    fin = nombre_archivo.find("_G", inicio)
+    if fin == -1:
+        fin = nombre_archivo.find("_"+satellite, inicio)
     if inicio != -1 and fin != -1:
         if isString == True:
             salida = int(nombre_archivo[inicio+3:fin])
@@ -510,23 +699,24 @@ def get_band(nombre_archivo,isString):
         return salida
     return None
 
-def get_bounding_box(lat, lon, radius_miles=100):
+def get_bounding_box(lat: float, lon: float, radius_miles: float = 100) -> List[float]:
     """
-    Calcula una caja delimitadora (bounding box) alrededor de un punto geográfico.
+    Calculates an equirectangular bounding box centered on a geographic coordinate.
+
+    Approximates great-circle distance using nautical-mile to degree conversion
+    (1 deg ≈ 60 NM / 69 statute miles).
 
     Args:
-        lat (float): Latitud del punto central.
-        lon (float): Longitud del punto central.
-        radius_miles (float, optional): Radio de la caja en millas. Por defecto es 100.
+        lat (float): Center latitude in decimal degrees.
+        lon (float): Center longitude in decimal degrees.
+        radius_miles (float, optional): Half-width radius in nautical or statute miles. Defaults to 100.
 
     Returns:
-        List[float]: Lista [oeste, sur, este, norte] que representa la bounding box.
+        List[float]: Bounding box coordinates formatted as [west, south, east, north].
     """
-    # Convert miles to degrees (approximate)
     miles_to_deg = 1 / 69.0  # 1 degree ≈ 69 miles
     radius_deg = radius_miles * miles_to_deg
 
-    # Calculate the bounding box
     south = lat - radius_deg
     north = lat + radius_deg
     west = lon - radius_deg
@@ -536,19 +726,26 @@ def get_bounding_box(lat, lon, radius_miles=100):
 
 def processImage(aFile: str, lat: Optional[Union[float, List[float]]] = None, lon: Optional[Union[float, List[float]]] = None, label: bool = False, bullseye: bool = True, watermark: Optional[str] = None) -> None:
     """
-    Procesa un archivo NetCDF de GOES para generar una imagen satelital georreferenciada.
+    Executes the scientific cartographic and raster processing pipeline for a GOES ABI NetCDF file.
 
-    Realiza el remapeo de datos, conversión a reflectancia o temperatura de brillo,
-    aplica el colormap correspondiente, sobrepone formas geográficas y genera archivos
-    PNG y TIFF con sus archivos auxiliares de georreferenciación (.pgw).
+    Workflow:
+        1. Metadata Extraction: Parses observation timestamp, spatial resolution, and band properties.
+        2. Geostationary Reprojection: Remaps raw geostationary perspective grid to Equirectangular (WGS84).
+        3. Physical Calibration: Inverts Planck function for thermal IR or computes gamma-enhanced solar reflectance.
+        4. Dynamic Memory Bounding: Constrains maximum dimensions via Lanczos spatial resampling.
+        5. Vector Overlays: Renders national borders, department boundaries, waypoints, and range rings.
+        6. Cartographic Publishing:
+           - Visual PNG image with calibrated CPT colormaps and metadata banner.
+           - ESRI Worldfile (.pgw) specifying affine transformation parameters.
+           - 16-bit GeoTIFF raster (T_B * 100 scaled integer) with LZW compression.
 
     Args:
-        aFile (str): Ruta del archivo NetCDF a procesar.
-        lat (Optional[Union[float, List[float]]], optional): Latitud(es) del punto de interés.
-        lon (Optional[Union[float, List[float]]], optional): Longitud(es) del punto de interés.
-        label (bool, optional): Si es True, añade título, escala de colores y nombre de la institución en la imagen. Por defecto es False.
-        bullseye (bool, optional): Si es True, dibuja anillos concéntricos alrededor del punto/centroide.
-        watermark (Optional[str], optional): Texto o institución para la marca de agua inferior. Si es None, toma el valor de config.yaml.
+        aFile (str): NetCDF filename or absolute path to process.
+        lat (Optional[Union[float, List[float]]], optional): Target latitude(s). Defaults to None.
+        lon (Optional[Union[float, List[float]]], optional): Target longitude(s). Defaults to None.
+        label (bool, optional): If True, adds colorbar, scale, and metadata footer. Defaults to False.
+        bullseye (bool, optional): If True, draws concentric nautical-mile range rings. Defaults to True.
+        watermark (Optional[str], optional): Custom institution or attribution banner. Defaults to None.
 
     Returns:
         None
@@ -578,9 +775,13 @@ def processImage(aFile: str, lat: Optional[Union[float, List[float]]] = None, lo
         Unit = "Brightness Temperature [°C]"
 
     Title = dsatellite.upper().replace("GOES", "GOES-") + " Band " + str(Band) + " " + Wavelenghts[int(Band)] + " " + Unit + " " + date + "  " + time
-    Institution = watermark if watermark is not None else config.get('general', {}).get('institucion', '')
+    Institution = watermark if watermark is not None else institucion
 
-    aImage = os.path.join(basePath, config['paths']['input'], dayjulianstring, aFile)
+    if os.path.exists(aFile):
+        aImage = aFile
+    else:
+        aFileName = os.path.basename(aFile)
+        aImage = os.path.join(basePath, config['paths']['input'], dayjulianstring, aFileName)
     ncImage = Dataset(aImage, 'r')
     time_coverage_start = ncImage.time_coverage_start
 
@@ -637,7 +838,8 @@ def processImage(aFile: str, lat: Optional[Union[float, List[float]]] = None, lo
         new_width = int(data.shape[1] * scale)
         new_height = int(data.shape[0] * scale)
         #print(f"Resizing data from {data.shape} to ({new_height}, {new_width})")
-        data = np.array(Image.fromarray(data.astype(np.float32)).resize((new_width, new_height), Image.Resampling.LANCZOS))
+        resample_filter = getattr(getattr(Image, 'Resampling', None), 'LANCZOS', getattr(Image, 'LANCZOS', Image.BILINEAR))
+        data = np.array(Image.fromarray(data.astype(np.float32)).resize((new_width, new_height), resample_filter))
     #print(f"Adjusted data shape: {data.shape}")
 
     channel_str = f"C{Band:02d}"
@@ -724,28 +926,24 @@ def processImage(aFile: str, lat: Optional[Union[float, List[float]]] = None, lo
         y_norm = (lat - extent[1]) / lat_range * data_shape[0]
         return x_norm, y_norm
 
-    shapefile_path = os.path.join(basePath, config['paths']['shapes'],config['shapes']['departamentos'])
-    bmap.readshapefile(shapefile_path, config['shapes']['departamentos_layer'], drawbounds=False)
+    dpto_shape = _cfg_get('shapes', 'departments', 'departamentos', default='MGN_DPTO_POLITICO')
+    dpto_layer = _cfg_get('shapes', 'departments_layer', 'departamentos_layer', default='MGN_DPTO_POLITICO')
+    shapefile_path = os.path.join(basePath, config['paths']['shapes'], dpto_shape)
+    bmap.readshapefile(shapefile_path, dpto_layer, drawbounds=False)
 
-    #print(f"Number of shapes loaded: {len(bmap.MGN_DPTO_POLITICO)}")
-    #if len(bmap.MGN_DPTO_POLITICO) > 0:
-    #    print(f"Sample shape (first 5 points): {bmap.MGN_DPTO_POLITICO[0][:5]}")
-
-    for shape in bmap.MGN_DPTO_POLITICO:
+    for shape in getattr(bmap, dpto_layer, []):
         x = [point[0] for point in shape]
         y = [point[1] for point in shape]
         x_norm = [(lon - extent[0]) / (extent[2] - extent[0]) * data.shape[1] for lon in x]
         y_norm = [(lat - extent[1]) / (extent[3] - extent[1]) * data.shape[0] for lat in y]
         ax.plot(x_norm, y_norm, color='white', linewidth=0.6, zorder=2)
 
-    country_shapefile_path = os.path.join(basePath, config['paths']['shapes'],config['shapes']['paises'])
-    bmap.readshapefile(country_shapefile_path, config['shapes']['paises_layer'], drawbounds=False)
+    country_shape = _cfg_get('shapes', 'countries', 'paises', default='ne_10m_admin_0_countries/ne_10m_admin_0_countries')
+    country_layer = _cfg_get('shapes', 'countries_layer', 'paises_layer', default='countries')
+    country_shapefile_path = os.path.join(basePath, config['paths']['shapes'], country_shape)
+    bmap.readshapefile(country_shapefile_path, country_layer, drawbounds=False)
 
-    #print(f"Number of country shapes loaded: {len(bmap.countries)}")
-    #if len(bmap.countries) > 0:
-    #    print(f"Sample country shape (first 5 points): {bmap.countries[0][:5]}")
-
-    for shape in bmap.countries:
+    for shape in getattr(bmap, country_layer, []):
         x = [point[0] for point in shape]
         y = [point[1] for point in shape]
         x_norm = [(lon - extent[0]) / (extent[2] - extent[0]) * data.shape[1] for lon in x]
@@ -938,15 +1136,15 @@ def processImage(aFile: str, lat: Optional[Union[float, List[float]]] = None, lo
     #if generateTiff:
     #    print(f"Grid type: {type(grid)}")       
 
-def validate_date(date_str):
+def validate_date(date_str: str) -> Optional[str]:
     """
-    Valida que una fecha esté en formato YYYYMMDD.
-    
+    Validates that an observation date adheres to the ISO 8601 calendar format 'YYYYMMDD'.
+
     Args:
-        date_str (str): Fecha a validar
-        
+        date_str (str): Date string to validate.
+
     Returns:
-        str: Fecha válida o None si es inválida
+        Optional[str]: Sanitized date string if valid, or None if validation fails.
     """
     try:
         datetime.strptime(date_str, '%Y%m%d')
@@ -955,116 +1153,188 @@ def validate_date(date_str):
         logging.error(f"Fecha inválida: {date_str}. Debe ser YYYYMMDD")
         return None
 
-def validate_time(time_str):
+def validate_time(time_str: str) -> Optional[str]:
     """
-    Valida que una hora/minuto sea un número de dos dígitos.
-    
+    Validates that a 2-digit hour or minute string is an integer within [00, 59].
+
     Args:
-        time_str (str): Hora o minuto a validar
-        
+        time_str (str): Time component string (HH or MM).
+
     Returns:
-        str: Valor válido o None si es inválido
+        Optional[str]: Validated 2-digit zero-padded time string, or None if invalid.
     """
-    if len(time_str) != 2 or not time_str.isdigit():
-        logging.error(f"Hora/minuto inválido: {time_str}. Debe tener 2 dígitos.")
+    if len(time_str) != 2 or not time_str.isdigit() or not (0 <= int(time_str) <= 59):
+        logging.error(f"Hora/minuto inválido: {time_str}. Debe tener 2 dígitos (00-59).")
         return None
     return time_str
 
-def validate_lat(lat):
+def validate_lat(lat: Optional[float]) -> Optional[float]:
     """
-    Valida que la latitud esté en rango (-90 a 90) o sea None.
-    
+    Validates that a geographic latitude is within the spherical domain [-90.0, 90.0].
+
     Args:
-        lat (float): Latitud proporcionada
-        
+        lat (Optional[float]): Candidate latitude in decimal degrees.
+
     Returns:
-        float: Latitud válida o None si es inválida
+        Optional[float]: Validated latitude float, or None if out of bounds or absent.
     """
     if lat is None:
         return None
-    if -90 <= lat <= 90:
+    if -90.0 <= lat <= 90.0:
         return lat
     else:
         logging.error("Latitud debe estar entre -90 y 90.")
         return None
 
-def validate_lon(lon):
+def validate_lon(lon: Optional[float]) -> Optional[float]:
     """
-    Valida que la longitud esté en rango (-180 a 180) o sea None.
-    
+    Validates that a geographic longitude is within the spherical domain [-180.0, 180.0].
+
     Args:
-        lon (float): Longitud proporcionada
-        
+        lon (Optional[float]): Candidate longitude in decimal degrees.
+
     Returns:
-        float: Longitud válida o None si es inválida
+        Optional[float]: Validated longitude float, or None if out of bounds or absent.
     """
     if lon is None:
         return None
-    if -180 <= lon <= 180:
+    if -180.0 <= lon <= 180.0:
         return lon
     else:
         logging.error("Longitud debe estar entre -180 y 180.")
         return None
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     """
-    Función principal que se encarga de recibir los parámetros de ejecucion y ejecutar el proceso de generación de imágenes.
+    Constructs the CLI argument parser with support for standard English flags
+    and backward-compatible Spanish aliases.
 
     Returns:
-        null: No retorna argumentos.
+        argparse.ArgumentParser: Configured command-line argument parser.
     """
-    parser = argparse.ArgumentParser(description='Script para procesamiento de imágenes satelitales del GOES-19')
-    parser.add_argument('--tipo', type=str, required=True, help='Tipo de ejecucion: auto/manual')
-    parser.add_argument('--fecha', type=str, help='Lista de fechas en formato YYYYMMDD separadas por comas (ej: 20240507)')
-    parser.add_argument('--horas', type=str, help='Horas en formato HH separadas por comas (ej: 01,02)')
-    parser.add_argument('--minutos', type=str, help='Minutos en formato MM separados por comas (ej: 00,10)')
-    parser.add_argument('--fuente', type=str, required=True, help='Fuente de los datos: aws | ideam')
-    parser.add_argument('--lat', type=str, help='Latitud(es) del marcador separadas por comas (entre -90 y 90)')
-    parser.add_argument('--lon', type=str, help='Longitud(es) del marcador separadas por comas (entre -180 y 180)')
-    parser.add_argument('--label', type=lambda x: x.lower() == 'true', default=False, help='Mostrar etiquetas y barra de color (True/False)')
-    parser.add_argument('--bullseye', type=lambda x: x.lower() == 'true', default=True, help='Mostrar anillos alrededor de los puntos (True/False)')
-    parser.add_argument('--watermark', '--institucion', type=str, default=None, help='Texto o marca de agua personalizada para la barra inferior')
+    parser = argparse.ArgumentParser(
+        description='GOES-16/19 Satellite Imagery Processing & Visualization Toolkit'
+    )
+    parser.add_argument(
+        '--mode', '--tipo',
+        dest='mode',
+        type=str,
+        required=True,
+        help='Execution mode: auto | manual'
+    )
+    parser.add_argument(
+        '--source', '--fuente',
+        dest='source',
+        type=str,
+        required=True,
+        help='Data source: aws | ideam'
+    )
+    parser.add_argument(
+        '--date', '--dates', '--fecha',
+        dest='date',
+        type=str,
+        help='Date(s) in YYYYMMDD format, comma-separated (e.g. 20240929,20240930)'
+    )
+    parser.add_argument(
+        '--hours', '--horas',
+        dest='hours',
+        type=str,
+        help='UTC hour(s) in HH format, comma-separated (e.g. 01,02,12)'
+    )
+    parser.add_argument(
+        '--minutes', '--minutos',
+        dest='minutes',
+        type=str,
+        help='Minute(s) in MM format, comma-separated (e.g. 00,30)'
+    )
+    parser.add_argument(
+        '--lat',
+        dest='lat',
+        type=str,
+        help='Target latitude(s) comma-separated (-90 to 90)'
+    )
+    parser.add_argument(
+        '--lon',
+        dest='lon',
+        type=str,
+        help='Target longitude(s) comma-separated (-180 to 180)'
+    )
+    parser.add_argument(
+        '--label',
+        dest='label',
+        type=lambda x: x.lower() == 'true',
+        default=False,
+        help='Render title bar, colorbar and metadata (True/False)'
+    )
+    parser.add_argument(
+        '--bullseye',
+        dest='bullseye',
+        type=lambda x: x.lower() == 'true',
+        default=True,
+        help='Draw concentric range rings around target coordinates (True/False)'
+    )
+    parser.add_argument(
+        '--watermark', '--institution', '--institucion',
+        dest='watermark',
+        type=str,
+        default=None,
+        help='Custom watermark or attribution label on the bottom bar'
+    )
+    return parser
 
-    args = parser.parse_args()
+def main(argv: Optional[List[str]] = None) -> None:
+    """
+    Main entry point for command-line parsing and pipeline execution.
 
-    logging.info("Modo de ejecución: %s", args.tipo)
+    Parses command-line arguments, validates dates, hours, minutes, and geographic
+    coordinates, and branches into either manual targeted processing or automated
+    near-real-time streaming.
 
-    if args.tipo == "manual":
-        if args.fecha is None:
-            logging.error('Para generar imágenes de tipo "manual" se requiere el parámetro --fecha=20220101,20220102')
+    Args:
+        argv (Optional[List[str]], optional): List of CLI argument tokens.
+            If None, defaults to sys.argv[1:].
+    """
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    logging.info("Execution mode: %s", args.mode)
+
+    if args.mode == "manual":
+        if args.date is None:
+            logging.error('Manual mode requires the --date (or --fecha) parameter (e.g. --date=20240929)')
             parser.print_help()
             sys.exit(1)
-        elif args.horas is None:
-            logging.error('Para generar imágenes de tipo "manual" se requiere el parámetro --horas=01,02')
+        elif args.hours is None:
+            logging.error('Manual mode requires the --hours (or --horas) parameter (e.g. --hours=11,12)')
             parser.print_help()
             sys.exit(1)
-        elif args.minutos is None:
-            logging.error('Para generar imágenes de tipo "manual" se requiere el parámetro --minutos=00,10')
+        elif args.minutes is None:
+            logging.error('Manual mode requires the --minutes (or --minutos) parameter (e.g. --minutes=00,30)')
             parser.print_help()
             sys.exit(1)
         else:
             # Validar lista de fechas
-            dates = args.fecha.split(',')
+            dates = [d.strip() for d in args.date.split(',')]
             validated_dates = [d for d in map(validate_date, dates) if d is not None]
             if len(validated_dates) < len(dates):
-                logging.error("Una o más fechas son inválidas. Usa formato YYYYMMDD.")
+                logging.error("One or more dates are invalid. Please use YYYYMMDD format.")
                 sys.exit(1)
 
             # Validar horas
-            hours = args.horas.split(',')
+            hours = [h.strip() for h in args.hours.split(',')]
             validated_hours = [h for h in map(validate_time, hours) if h is not None]
             if len(validated_hours) < len(hours):
-                logging.error("Una o más horas son inválidas. Deben ser números de 2 dígitos.")
+                logging.error("One or more hours are invalid. Must be 2-digit numbers (00-23).")
                 sys.exit(1)
 
             # Validar minutos
-            minutes = args.minutos.split(',')
+            minutes = [m.strip() for m in args.minutes.split(',')]
             validated_minutes = [m for m in map(validate_time, minutes) if m is not None]
             if len(validated_minutes) < len(minutes):
-                logging.error("Uno o más minutos son inválidos. Deben ser números de 2 dígitos.")
+                logging.error("One or more minutes are invalid. Must be 2-digit numbers (00-59).")
                 sys.exit(1)
 
-            # Procesar latitud y longitud (pueden ser uno o varios valores)
+            # Procesar latitud y longitud
             lats = []
             lons = []
             
@@ -1073,11 +1343,11 @@ def main():
                     lats = [float(x.strip()) for x in args.lat.split(',')]
                     validated_lats = [validate_lat(l) for l in lats]
                     if None in validated_lats:
-                        logging.error("Una o más latitudes son inválidas. Deben estar entre -90 y 90.")
+                        logging.error("One or more latitudes are invalid. Must be between -90 and 90.")
                         sys.exit(1)
                     lats = validated_lats
                 except ValueError:
-                    logging.error("Formato de latitud inválido. Debe ser un número o lista de números separados por comas.")
+                    logging.error("Invalid latitude format. Must be a number or comma-separated numbers.")
                     sys.exit(1)
 
             if args.lon is not None:
@@ -1085,31 +1355,38 @@ def main():
                     lons = [float(x.strip()) for x in args.lon.split(',')]
                     validated_lons = [validate_lon(l) for l in lons]
                     if None in validated_lons:
-                        logging.error("Una o más longitudes son inválidas. Deben estar entre -180 y 180.")
+                        logging.error("One or more longitudes are invalid. Must be between -180 and 180.")
                         sys.exit(1)
                     lons = validated_lons
                 except ValueError:
-                    logging.error("Formato de longitud inválido. Debe ser un número o lista de números separados por comas.")
+                    logging.error("Invalid longitude format. Must be a number or comma-separated numbers.")
                     sys.exit(1)
 
             # Verificar que tengan la misma longitud si ambos están presentes
             if lats and lons and len(lats) != len(lons):
-                logging.error("La cantidad de latitudes y longitudes debe ser la misma.")
+                logging.error("Latitude and longitude counts must match.")
                 sys.exit(1)
 
-            # Si se proporcionó solo uno, usar el valor como flotante (o lista de un elemento)
-            # manual_date ahora espera listas o None
             final_lat = lats if lats else None
             final_lon = lons if lons else None
 
             # Continuar con proceso manual
-            manual_date(validated_dates, validated_hours, validated_minutes, final_lat, final_lon, args.label, args.bullseye, watermark=args.watermark)
+            manual_date(
+                validated_dates,
+                validated_hours,
+                validated_minutes,
+                final_lat,
+                final_lon,
+                args.label,
+                args.bullseye,
+                watermark=args.watermark
+            )
 
-    elif args.tipo == "auto":
-        auto_date(args.fuente, args.label, watermark=args.watermark)
+    elif args.mode == "auto":
+        auto_date(args.source, args.label, watermark=args.watermark)
 
     else:
-        logging.error('Tipo de ejecución desconocido. Usa: manual|auto')
+        logging.error('Unknown execution mode: %s. Use: manual | auto', args.mode)
         parser.print_help()
         sys.exit(1)    
 # Punto de entrada del script

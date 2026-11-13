@@ -83,7 +83,7 @@ flowchart LR
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/julianpc/goes-imagery-toolkit.git
+   git clone https://github.com/jpantojac/goes-imagery-toolkit.git
    cd goes-imagery-toolkit
    ```
 
@@ -112,18 +112,18 @@ The tool supports two execution modes: **Manual** (historical events and targete
 
 #### Example 1: Full Regional Domain
 ```bash
-python app/main.py --tipo="manual" --fuente="aws" --fecha=20240929 --horas=11 --minutos=00
+python app/main.py --mode="manual" --source="aws" --date=20240929 --hours=11 --minutes=00
 ```
 
 #### Example 2: Target Coordinate with Nautical Mile Bullseye
 Generate imagery centered on a target location (e.g. Bogota, Colombia `lat=4.711`, `lon=-74.072`) with 200 NM concentric distance rings:
 ```bash
 python app/main.py \
-  --tipo="manual" \
-  --fuente="aws" \
-  --fecha=20240929 \
-  --horas=11,12 \
-  --minutos=00 \
+  --mode="manual" \
+  --source="aws" \
+  --date=20240929 \
+  --hours=11,12 \
+  --minutes=00 \
   --lat=4.711 \
   --lon=-74.072 \
   --label=true \
@@ -134,11 +134,11 @@ python app/main.py \
 Highlight multiple coordinates across a storm path without distance rings:
 ```bash
 python app/main.py \
-  --tipo="manual" \
-  --fuente="aws" \
-  --fecha=20240929 \
-  --horas=11 \
-  --minutos=00 \
+  --mode="manual" \
+  --source="aws" \
+  --date=20240929 \
+  --hours=11 \
+  --minutes=00 \
   --lat=4.711,10.968,6.244 \
   --lon=-74.072,-74.781,-75.581 \
   --bullseye=false \
@@ -149,23 +149,23 @@ python app/main.py \
 
 Download and generate products for the most recent observation from the NOAA public S3 bucket:
 ```bash
-python app/main.py --tipo="auto" --fuente="aws" --label=true
+python app/main.py --mode="auto" --source="aws" --label=true
 ```
 
 ### 3. CLI Argument Reference
 
-| Argument | Type | Default | Description |
-|:---|:---:|:---:|:---|
-| `--tipo` | `str` | *Required* | Execution mode: `manual` or `auto`. |
-| `--fuente` | `str` | *Required* | Ingestion source: `aws` (NOAA S3 bucket) or `ideam`. |
-| `--fecha` | `str` | `None` | Date in `YYYYMMDD` format (comma-separated for multiple dates). |
-| `--horas` | `str` | `None` | UTC hours in `HH` format (comma-separated, e.g. `00,06,12`). |
-| `--minutos` | `str` | `None` | Minutes in `MM` format (comma-separated, e.g. `00,30`). |
-| `--lat` | `str` | `None` | Target latitude(s) between -90 and 90 (comma-separated). |
-| `--lon` | `str` | `None` | Target longitude(s) between -180 and 180 (comma-separated). |
-| `--label` | `bool` | `False` | Render title bar, colorbar, and metadata (`true`/`false`). |
-| `--bullseye` | `bool` | `True` | Draw concentric range rings (`true`) or marker pins (`false`). |
-| `--watermark` | `str` | `config.yaml` | Custom label or institution text rendered on bottom bar. |
+| Argument (English) | Alias (Spanish) | Type | Default | Description |
+|:---|:---|:---:|:---:|:---|
+| `--mode` | `--tipo` | `str` | *Required* | Execution mode: `manual` or `auto`. |
+| `--source` | `--fuente` | `str` | *Required* | Ingestion source: `aws` (NOAA S3 bucket) or `ideam`. |
+| `--date` | `--fecha`, `--dates` | `str` | `None` | Date in `YYYYMMDD` format (comma-separated for multiple dates). |
+| `--hours` | `--horas` | `str` | `None` | UTC hours in `HH` format (comma-separated, e.g. `00,06,12`). |
+| `--minutes` | `--minutos` | `str` | `None` | Minutes in `MM` format (comma-separated, e.g. `00,30`). |
+| `--lat` | | `str` | `None` | Target latitude(s) between -90 and 90 (comma-separated). |
+| `--lon` | | `str` | `None` | Target longitude(s) between -180 and 180 (comma-separated). |
+| `--label` | | `bool` | `False` | Render title bar, colorbar, and metadata (`true`/`false`). |
+| `--bullseye` | | `bool` | `True` | Draw concentric range rings (`true`) or marker pins (`false`). |
+| `--watermark` | `--institution`, `--institucion` | `str` | `config.yaml` | Custom label or institution text rendered on bottom bar. |
 
 ---
 
@@ -212,7 +212,7 @@ If you use this toolkit in academic research, thesis projects, or operational re
   title        = {GOES Imagery Toolkit: Automated Processing, Radiometric Calibration, and Cartographic Visualization for GOES-16/19 ABI Data},
   year         = {2026},
   version      = {1.0.0},
-  url          = {https://github.com/julianpc/goes-imagery-toolkit},
+  url          = {https://github.com/jpantojac/goes-imagery-toolkit},
   license      = {MIT}
 }
 ```

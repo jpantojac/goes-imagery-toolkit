@@ -1,11 +1,11 @@
-# config.yaml - Configuración principal del proyecto
+# config.yaml - Core Project Configuration
 
 general:
-  institucion: "Open Satellite Project"
-  generateTiff: True
-  archivo_registro: "ultima_descarga.txt"
+  institution: "Open Satellite Project"
+  generate_tiff: true
+  registry_file: "ultima_descarga.txt"
 
-satelite:
+satellite:
   channels:
     - "01"
     - "09"
@@ -18,7 +18,7 @@ satelite:
   satellite: "G19"
 
 paths:
-  base: ""  # Vacío para resolver dinámicamente la ruta relativa del proyecto
+  base: ""  # Leave empty to dynamically resolve project root
   input: "input"
   shapes: "shapes"
   output: "output"
@@ -26,15 +26,15 @@ paths:
   colors: "colors"
 
 shapes:
-  departamentos: "MGN_DPTO_POLITICO"
-  departamentos_layer: "MGN_DPTO_POLITICO"
-  paises: "ne_10m_admin_0_countries/ne_10m_admin_0_countries"
-  paises_layer: "countries"
+  departments: "MGN_DPTO_POLITICO"
+  departments_layer: "MGN_DPTO_POLITICO"
+  countries: "ne_10m_admin_0_countries/ne_10m_admin_0_countries"
+  countries_layer: "countries"
 
 colors:
   visible: "grey255.cpt"
-  infrarojo: "thermal.cpt"
-  vapor_agua: "WV.cpt"
+  infrared: "thermal.cpt"
+  water_vapor: "WV.cpt"
 
 plotting:
   resolution_zoomed: 0.2
@@ -42,8 +42,8 @@ plotting:
   dpi_default: 100
   max_pixels: 65536
   radius_nautical_miles: 200
-  show_rings: True
-  ring_mode: "individual"  # Opciones: "centroid", "individual"
+  show_rings: true
+  ring_mode: "individual"  # Options: "centroid", "individual"
   label_offset_x: 0.01
   rect_height_factor: 0.03
   title_font_size_zoomed: 8
@@ -52,6 +52,6 @@ plotting:
   institution_font_size_full: 10
   extent_default:
     - -100 #W
-    - -14 #S
-    - -50 #E
-    - 30 #N
+    - -14  #S
+    - -50  #E
+    - 30   #N

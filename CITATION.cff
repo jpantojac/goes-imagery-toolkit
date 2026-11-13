@@ -8,7 +8,7 @@ authors:
 version: "1.0.0"
 date-released: "2026-05-23"
 license: "MIT"
-repository-code: "https://github.com/julianpc/goes-imagery-toolkit"
+repository-code: "https://github.com/jpantojac/goes-imagery-toolkit"
 keywords:
   - "earth-observation"
   - "remote-sensing"

@@ -1,39 +1,36 @@
-# Usar la imagen base de Debian
-FROM debian:bullseye-slim
+# Use official Ubuntu 22.04 LTS - ultra-fast, stable and proven for geospatial stacks
+FROM ubuntu:22.04
 
-# Instalar dependencias del sistema
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1
+
+# 1. Install Python, GDAL, NetCDF4, and core scientific libraries from Ubuntu repositories (~30 seconds)
 RUN apt-get update && apt-get install -y \
-    gdal-bin \
-    libgdal-dev \
     python3 \
     python3-pip \
-    python3-dev \
-    build-essential \
-    gfortran \
-    wget \
-    curl \
+    python-is-python3 \
+    python3-gdal \
+    python3-netcdf4 \
+    python3-numpy \
+    python3-matplotlib \
+    python3-pil \
+    python3-yaml \
+    python3-requests \
+    python3-bs4 \
+    gdal-bin \
     libgeos-dev \
-    libproj-dev \
-    libcurl4-openssl-dev \
-    libffi-dev
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# Instalar las librerías necesarias
+# 2. Install Basemap, MetPy and GOES from pre-compiled binary wheels (~15 seconds)
 RUN pip3 install --no-cache-dir \
-    gdal \
-    numpy \
-    netCDF4 \
-    matplotlib \
-    cartopy \
-    wrf-python \
-    xarray \
-    pandas \
+    basemap==1.4.1 \
+    basemap-data==1.3.2 \
+    metpy \
     GOES
 
-# Establece el directorio de trabajo
+# Set working directory inside the container
 WORKDIR /app
-# Copia el código fuente (opcional)
-# COPY . /app/
 
-# Define el comando predeterminado
+# Keep container running for CLI executions
 CMD ["tail", "-f", "/dev/null"]
-

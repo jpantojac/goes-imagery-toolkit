@@ -181,17 +181,41 @@ class TestSatelliteImageGeneration(unittest.TestCase):
         self._assert_generated_files()
 
     def test_07_cli_command_invocation_with_arguments(self):
-        """Prueba a nivel CLI simulando ejecución de main.py completo con argumentos."""
-        print("\n[TEST 7] Ejecutando: Invocación CLI completa (main())...")
+        """Prueba a nivel CLI simulando ejecución de main.py completo con argumentos en inglés."""
+        print("\n[TEST 7] Ejecutando: Invocación CLI completa en inglés (main())...")
         self._prepare_case_folder("07_cli_full_invocation")
+
+        cli_args = [
+            "main.py",
+            "--mode=manual",
+            "--source=aws",
+            f"--date={self.expected_timestamp[:8]}",
+            f"--hours={self.expected_timestamp[8:10]}",
+            f"--minutes={self.expected_timestamp[10:12]}",
+            "--lat=4.711,10.968",
+            "--lon=-74.072,-74.781",
+            "--label=true",
+            "--bullseye=false"
+        ]
+
+        with patch.object(sys, "argv", cli_args):
+            with patch("main.download", return_value=[self.sample_nc]):
+                main.main()
+
+        self._assert_generated_files()
+
+    def test_08_cli_spanish_aliases_invocation(self):
+        """Prueba a nivel CLI simulando ejecución con alias en español (--tipo, --fuente, --fecha...)."""
+        print("\n[TEST 8] Ejecutando: Invocación CLI con alias en español (--tipo, --fuente)...")
+        self._prepare_case_folder("08_cli_spanish_aliases")
 
         cli_args = [
             "main.py",
             "--tipo=manual",
             "--fuente=aws",
-            "--fecha=20190711",
-            "--horas=10",
-            "--minutos=00",
+            f"--fecha={self.expected_timestamp[:8]}",
+            f"--horas={self.expected_timestamp[8:10]}",
+            f"--minutos={self.expected_timestamp[10:12]}",
             "--lat=4.711,10.968",
             "--lon=-74.072,-74.781",
             "--label=true",

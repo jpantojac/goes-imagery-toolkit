@@ -7,5 +7,6 @@ services:
     container_name: goes-toolkit
     volumes:
       - ./app:/app
+      - ./tests:/app/tests:ro
     working_dir: /app
     command: tail -f /dev/null
