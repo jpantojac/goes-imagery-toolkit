@@ -6,6 +6,8 @@ import sys
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(TESTS_DIR)
 APP_DIR = os.path.join(PROJECT_ROOT, "app")
+if not os.path.exists(os.path.join(APP_DIR, "colors")) and os.path.exists(os.path.join(PROJECT_ROOT, "colors")):
+    APP_DIR = PROJECT_ROOT
 if APP_DIR not in sys.path:
     sys.path.insert(0, APP_DIR)
 
@@ -160,6 +162,19 @@ class TestCalibrationAndGeometry(unittest.TestCase):
         f_g16 = "OR_ABI-L1b-RadF-M6C01_G16_s20242731200210_e20242731209518_c20242731209567.nc"
         self.assertEqual(main.get_band(f_g16, True), 1)
         self.assertEqual(main.get_band(f_g16, False), "01")
+
+    def test_all_16_cpt_colormaps_exist_and_load(self):
+        """Verifica que existan y sean válidos los 16 archivos CPT (ch01.cpt a ch16.cpt)."""
+        colors_dir = os.path.join(APP_DIR, "colors")
+        for band in range(1, 17):
+            cpt_file = os.path.join(colors_dir, f"ch{band:02d}.cpt")
+            self.assertTrue(os.path.exists(cpt_file), f"Falta el archivo CPT para el canal {band:02d}: {cpt_file}")
+            if main.loadCPT is not None:
+                cpt_dict = main.loadCPT(cpt_file)
+                self.assertIsNotNone(cpt_dict, f"Error cargando CPT {cpt_file}")
+                self.assertIn("red", cpt_dict)
+                self.assertIn("green", cpt_dict)
+                self.assertIn("blue", cpt_dict)
 
 
 if __name__ == "__main__":

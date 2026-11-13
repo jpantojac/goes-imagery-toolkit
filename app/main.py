@@ -112,9 +112,13 @@ import time
 try:
     import requests
     from bs4 import BeautifulSoup
+    from urllib3.util.retry import Retry
+    from requests.adapters import HTTPAdapter
 except (ImportError, ModuleNotFoundError):
     requests = None
     BeautifulSoup = None
+    Retry = None
+    HTTPAdapter = None
 
 import urllib3
 from typing import Optional, List, Union, Callable
@@ -388,6 +392,93 @@ def prepare_folders(dates: List[str]) -> None:
         create_folder(os.path.join(basePath, config['paths']['input'], fecha), False)
         create_folder(os.path.join(basePath, config['paths']['output'], fecha), False)
 
+def _progress_download_file(
+    URL: str,
+    name_file: str,
+    path_out: str,
+    retries: int = 10,
+    backoff: float = 0.2,
+    size_format: str = 'Decimal',
+    show_download_progress: bool = True,
+    overwrite_file: bool = False
+) -> None:
+    """
+    Downloads a remote NetCDF file from NOAA S3, logging thread-safe percentage
+    and a visual progress bar milestones for concurrent worker threads.
+
+    Args:
+        URL (str): Remote S3 HTTP/HTTPS URL.
+        name_file (str): Output filename.
+        path_out (str): Destination folder path.
+        retries (int, optional): Connection retries. Defaults to 10.
+        backoff (float, optional): Exponential backoff factor. Defaults to 0.2.
+        size_format (str, optional): 'Decimal' (MB = 1e6 B) or 'Binary'. Defaults to 'Decimal'.
+        show_download_progress (bool, optional): Kept for signature compatibility with GOES.download.
+        overwrite_file (bool, optional): If True, redownloads existing files. Defaults to False.
+    """
+    if requests is None:
+        raise RuntimeError("The 'requests' package is required for downloading satellite files.")
+
+    ch_label = "CH"
+    for tag in ("_M6C", "_M3C", "_M4C", "_C"):
+        if tag in name_file:
+            ch_label = "C" + name_file.split(tag)[1][:2]
+            break
+
+    session = requests.Session()
+    if Retry is not None and HTTPAdapter is not None:
+        retries_config = Retry(total=retries, backoff_factor=backoff, status_forcelist=[500, 502, 503, 504])
+        session.mount('http://', HTTPAdapter(max_retries=retries_config))
+        session.mount('https://', HTTPAdapter(max_retries=retries_config))
+
+    full_target_path = os.path.join(path_out, name_file)
+    req = session.get(URL, stream=True)
+    content_length = req.headers.get('content-length')
+    total_size = int(content_length) if content_length else 0
+    dsize = 1000 * 1000 if size_format == 'Decimal' else 1024 * 1024
+
+    if os.path.isfile(full_target_path) and not overwrite_file:
+        if total_size > 0 and os.path.getsize(full_target_path) == total_size:
+            logging.info(f"[{ch_label}] File already exists locally: {name_file}")
+            return
+
+    os.makedirs(path_out, exist_ok=True)
+    downloaded = 0
+    last_milestone = -1
+    bar_width = 15
+
+    total_mb_str = f"{total_size / dsize:.1f} MB" if total_size > 0 else "unknown size"
+    logging.info(f"[{ch_label}] Ingesting {name_file} ({total_mb_str})...")
+
+    with open(full_target_path, 'wb') as output_file:
+        for chunk in req.iter_content(chunk_size=128 * 1024):
+            if chunk:
+                output_file.write(chunk)
+                downloaded += len(chunk)
+                if total_size > 0:
+                    pct = (downloaded / total_size) * 100.0
+                    milestone = int(pct // 20) * 20
+                    if milestone > last_milestone and milestone in (20, 40, 60, 80, 100):
+                        filled = int(round(bar_width * downloaded / total_size))
+                        bar_str = '=' * filled + (' ' * (bar_width - filled))
+                        logging.info(
+                            f"[{ch_label}] [{bar_str}] {pct:5.1f}% "
+                            f"({downloaded / dsize:.1f}/{total_size / dsize:.1f} MB)"
+                        )
+                        last_milestone = milestone
+
+    if total_size == 0 or last_milestone < 100:
+        bar_str = '=' * bar_width
+        logging.info(f"[{ch_label}] [{bar_str}] 100.0% ({downloaded / dsize:.1f} MB) - Download complete")
+
+# Install progress tracking hook into GOES package if present
+if GOES is not None:
+    try:
+        import GOES.downloads.download_data as _goes_dd
+        _goes_dd.download_file = _progress_download_file
+    except Exception as _hook_err:
+        logging.debug(f"Could not hook GOES download_file: {_hook_err}")
+
 def _download_channel_slot(
     ch: Union[str, int],
     date: str,
@@ -440,7 +531,6 @@ def _download_channel_slot(
     flist = []
     if GOES is not None:
         try:
-            logging.info(f"Downloading Channel {ch_str} for {date} {hour}:{minute} UTC...")
             flist = GOES.download(
                 dsat,
                 'ABI-L1b-RadF',
@@ -456,8 +546,6 @@ def _download_channel_slot(
             logging.warning(f"Error querying GOES data for channel {ch_str} ({date} {hour}:{minute} UTC): {dl_err}")
 
     if flist:
-        for f in flist:
-            logging.info(f"Downloaded Channel {ch_str}: {os.path.basename(f)}")
         return flist
 
     # 3. Fallback disk check in case file was saved without returning path
@@ -1032,25 +1120,44 @@ def processImage(aFile: str, lat: Optional[Union[float, List[float]]] = None, lo
 
     im = ax.imshow(data_for_png, origin='upper', extent=norm_extent, interpolation='bilinear', aspect='equal', zorder=1)
     colors_dir = os.path.join(basePath, config['paths']['colors'])
+    cpt_name = f"ch{Band:02d}.cpt"
+    cpt_path = os.path.join(colors_dir, cpt_name)
+
+    # Physical dynamic limits per ABI band category
     if Band <= 6:
-        cpt = loadCPT(os.path.join(colors_dir, "grey255.cpt"))
-        cpt_convert = LinearSegmentedColormap('cpt', cpt)
-        im.set_cmap(cpt_convert)
-        im.set_clim(0, 1)
+        clim_min, clim_max = 0.0, 1.0
     elif Band == 7:
-        cpt = loadCPT(os.path.join(colors_dir, "thermal.cpt"))
-        cpt_convert = LinearSegmentedColormap('cpt', cpt)
-        im.set_cmap(cpt_convert)
-        im.set_clim(-112.15, 56.85)
-    elif Band > 7 and Band < 11:
-        cpt = loadCPT(os.path.join(colors_dir, "WV_red_black.cpt"))
-        cpt_convert = LinearSegmentedColormap('cpt', cpt)
-        cpt_convert_reversed = cpt_convert.reversed()
-        im.set_cmap(cpt_convert_reversed)
-        im.set_clim(-85, -30)
-    elif Band > 10:
-        im.set_cmap(colors.rainbow)
-        im.set_clim(-90, 50)
+        clim_min, clim_max = -112.15, 56.85
+    elif 8 <= Band <= 10:
+        clim_min, clim_max = -85.0, -30.0
+    else:  # Bands 11 through 16
+        clim_min, clim_max = -90.0, 50.0
+
+    cmap_applied = False
+    if os.path.exists(cpt_path):
+        cpt_dict = loadCPT(cpt_path)
+        if cpt_dict is not None:
+            cpt_cmap = LinearSegmentedColormap(f'cpt_ch{Band:02d}', cpt_dict)
+            if 8 <= Band <= 10:
+                cpt_cmap = cpt_cmap.reversed()
+            im.set_cmap(cpt_cmap)
+            cmap_applied = True
+
+    if not cmap_applied:
+        # Fallback to legacy defaults if specific chXX.cpt is missing
+        if Band <= 6:
+            cpt = loadCPT(os.path.join(colors_dir, "grey255.cpt"))
+            im.set_cmap(LinearSegmentedColormap('cpt', cpt) if cpt else 'gray')
+        elif Band == 7:
+            cpt = loadCPT(os.path.join(colors_dir, "thermal.cpt"))
+            im.set_cmap(LinearSegmentedColormap('cpt', cpt) if cpt else 'inferno')
+        elif 8 <= Band <= 10:
+            cpt = loadCPT(os.path.join(colors_dir, "WV_red_black.cpt"))
+            im.set_cmap(LinearSegmentedColormap('cpt', cpt).reversed() if cpt else 'viridis')
+        else:
+            im.set_cmap(colors.rainbow if (colors and hasattr(colors, 'rainbow')) else 'rainbow')
+
+    im.set_clim(clim_min, clim_max)
 
     ax.set_xlim(0, data.shape[1])
     ax.set_ylim(0, data.shape[0])

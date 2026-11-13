@@ -49,18 +49,28 @@ $$R_{\gamma} = \sqrt{\text{clip}(R, 0, 1)}$$
 
 ---
 
-## 🛰️ ABI Band Reference Guide
+## 🛰️ ABI Band Reference & Scientific Enhancements (RAMMB/CIRA)
 
-| Band | Central $\lambda$ | Spectrum | Native Res. | Meteorological Application |
-|:---:|:---:|:---:|:---:|:---|
-| **C01** | $0.47\ \mu\text{m}$ | Visible (Blue) | 1 km | Daytime aerosol, smoke detection, atmospheric haze |
-| **C02** | $0.64\ \mu\text{m}$ | Visible (Red) | 0.5 km | Daytime cloud, storm tracking, terrain & land monitoring |
-| **C03** | $0.86\ \mu\text{m}$ | Near-IR (Veggie) | 1 km | Vegetation index (NDVI), burn scars, water body delineation |
-| **C07** | $3.90\ \mu\text{m}$ | Shortwave IR | 2 km | Wildfire detection, hot spot analysis, fog/low stratus detection |
-| **C08** | $6.19\ \mu\text{m}$ | Upper Troposphere WV | 2 km | High-altitude atmospheric winds, jet stream dynamics |
-| **C09** | $6.95\ \mu\text{m}$ | Mid Troposphere WV | 2 km | Mid-tropospheric moisture, synoptic vorticity tracking |
-| **C10** | $7.34\ \mu\text{m}$ | Lower Troposphere WV | 2 km | Low-level humidity, precursor to convective storm initiation |
-| **C13** | $10.35\ \mu\text{m}$ | Clean Longwave IR | 2 km | Cloud-top temperature, convective storm depth, severe weather |
+The toolkit provides dedicated scientific colormaps (`ch01.cpt` through `ch16.cpt`) inspired by NOAA RAMMB/CIRA standards, tailored for meteorological and environmental phenomena:
+
+| Band | Central $\lambda$ | Spectrum | Native Res. | Colormap | Meteorological Application |
+|:---:|:---:|:---:|:---:|:---:|:---|
+| **C01** | $0.47\ \mu\text{m}$ | Visible (Blue) | 1 km | `ch01.cpt` | Daytime aerosol, smoke detection, atmospheric haze |
+| **C02** | $0.64\ \mu\text{m}$ | Visible (Red) | 0.5 km | `ch02.cpt` | High-resolution daytime cloud, storm tracking, terrain & land |
+| **C03** | $0.86\ \mu\text{m}$ | Near-IR (Veggie) | 1 km | `ch03.cpt` | Chlorophyll/NDVI, burn scars, water body delineation |
+| **C04** | $1.37\ \mu\text{m}$ | Near-IR (Cirrus) | 2 km | `ch04.cpt` | Faint high-altitude cirrus cloud detection against dark surface |
+| **C05** | $1.61\ \mu\text{m}$ | Near-IR (Snow/Ice) | 1 km | `ch05.cpt` | Snow vs. water-cloud discrimination (ice absorption) |
+| **C06** | $2.25\ \mu\text{m}$ | Near-IR (Cloud Size) | 2 km | `ch06.cpt` | Cloud particle effective radius, microphysics |
+| **C07** | $3.90\ \mu\text{m}$ | Shortwave IR | 2 km | `ch07.cpt` | Wildfire & hotspot detection, nocturnal fog/stratus |
+| **C08** | $6.19\ \mu\text{m}$ | Upper Troposphere WV | 2 km | `ch08.cpt` | Upper-level jet streams, dry slots, dynamical vorticity |
+| **C09** | $6.95\ \mu\text{m}$ | Mid Troposphere WV | 2 km | `ch09.cpt` | Mid-tropospheric moisture, synoptic circulation |
+| **C10** | $7.34\ \mu\text{m}$ | Lower Troposphere WV | 2 km | `ch10.cpt` | Low-level humidity, convective storm precursors |
+| **C11** | $8.50\ \mu\text{m}$ | Cloud-Top Phase | 2 km | `ch11.cpt` | Cloud thermodynamic phase (ice vs liquid), volcanic $SO_2$ |
+| **C12** | $9.61\ \mu\text{m}$ | Ozone | 2 km | `ch12.cpt` | Total column ozone, stratospheric intrusions |
+| **C13** | $10.35\ \mu\text{m}$ | Clean Longwave IR | 2 km | `ch13.cpt` | Primary cloud-top temperature, convective storms (Rainbow) |
+| **C14** | $11.20\ \mu\text{m}$ | Traditional Longwave IR| 2 km | `ch14.cpt` | Dvorak hurricane intensity analysis, SST validation |
+| **C15** | $12.30\ \mu\text{m}$ | Dirty Longwave IR | 2 km | `ch15.cpt` | Low-level moisture correction, airborne dust & sandstorms |
+| **C16** | $13.30\ \mu\text{m}$ | $CO_2$ Longwave IR | 2 km | `ch16.cpt` | Cloud-top height estimation, tropospheric cooling |
 
 ---
 
