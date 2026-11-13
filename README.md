@@ -72,6 +72,32 @@ The toolkit provides dedicated scientific colormaps (`ch01.cpt` through `ch16.cp
 | **C15** | $12.30\ \mu\text{m}$ | Dirty Longwave IR | 2 km | `ch15.cpt` | Low-level moisture correction, airborne dust & sandstorms |
 | **C16** | $13.30\ \mu\text{m}$ | $CO_2$ Longwave IR | 2 km | `ch16.cpt` | Cloud-top height estimation, tropospheric cooling |
 
+### 🎨 Enhancement Families (`default` vs `noaa`)
+
+The toolkit provides a modular enhancement families architecture allowing users to select or customize color palettes across all 16 ABI channels without altering existing files:
+
+* **`default` Family (`--family=default`)**:
+  - **Band 13**: Convective Rainbow / Oklahoma enhancement (`colors.rainbow` / `oklahoma.cpt`, $[-90^\circ\text{C}, 50^\circ\text{C}]$).
+  - **Band 09**: Mid-tropospheric Water Vapor (`WV_red_black.cpt`, $[-85^\circ\text{C}, -30^\circ\text{C}]$).
+  - **Band 01**: Grayscale solar reflectance (`grey255.cpt`, $[0.0, 1.0]$).
+  - **Bands 02–16**: Scientific RAMMB/CIRA palettes (`app/colors/default/chXX.cpt`).
+
+* **`noaa` Family (`--family=noaa`)**:
+  - Official operational full-disk palettes as published on NOAA/NESDIS/NHC ([goes.noaa.gov](https://goes.noaa.gov/fulldisk.php?sat=G19&src=nhc)).
+  - **Bands 01–06**: Linear TOA reflectance grayscale ($[0.0, 1.0]$).
+  - **Band 07**: Shortwave IR / Fire temperature anomaly ($[-90^\circ\text{C}, 130^\circ\text{C}]$).
+  - **Bands 08–10**: NOAA Water Vapor ($[-90^\circ\text{C}, 20^\circ\text{C}]$).
+  - **Bands 11–15**: NOAA Longwave IR window BD/NHC curve ($[-110^\circ\text{C}, 55^\circ\text{C}]$).
+  - **Band 16**: Inverted thermal grayscale ($[-120^\circ\text{C}, 50^\circ\text{C}]$).
+
+Configure the global enhancement family in `app/config.yaml`:
+```yaml
+colors:
+  family: "default"   # "default" or "noaa" (can be overridden with --family CLI flag)
+```
+
+Custom user families can be added by placing `ch01.cpt` through `ch16.cpt` inside `app/colors/<family_name>/` or using the filename pattern `app/colors/chXX_<family_name>.cpt`.
+
 ---
 
 ## 🏗️ Architecture & Processing Pipeline
@@ -177,6 +203,7 @@ python app/main.py --mode="auto" --source="aws" --label=true
 | `--bullseye` | | `bool` | `True` | Draw concentric range rings (`true`) or marker pins (`false`). |
 | `--watermark` | `--institution`, `--institucion` | `str` | `config.yaml` | Custom label or institution text rendered on bottom bar. |
 | `--overwrite` | `--force` | `bool` | `False` | Force re-generation of products even if `.png` and `.tif` already exist (`true`/`false`). |
+| `--family` | `--palette`, `--enhancement` | `str` | `default` | Colormap enhancement family: `default` (Oklahoma on C13, WV on C09) or `noaa` (official goes.noaa.gov full-disk palettes). |
 
 ---
 

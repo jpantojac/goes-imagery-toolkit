@@ -55,6 +55,7 @@ python app/main.py \
 | `--bullseye` | | Anillos concéntricos (`true`) o marcadores numerados P1, P2 (`false`) | `--bullseye=true` |
 | `--watermark` | `--institution`, `--institucion` | Texto personalizado de atribución en la barra inferior | `--watermark="My Lab"` |
 | `--overwrite` | `--force` | Fuerza la regeneración de productos incluso si ya existen en output/ (`true`/`false`) | `--overwrite=true` |
+| `--family` | `--palette`, `--enhancement` | Familia de realces de color: `"default"` (Oklahoma en C13, WV regional) o `"noaa"` (paletas oficiales goes.noaa.gov) | `--family="noaa"` |
 
 ## 4. Directrices Finales para el Agente
 - **Códigos ICAO / Topónimos**: Siempre que el usuario provea una ciudad, departamento o código ICAO (ej. SKCG, SKBO, etc.), es tu responsabilidad como Agente traducir ese identificador a sus coordenadas reales para los parámetros `--lat` y `--lon`.

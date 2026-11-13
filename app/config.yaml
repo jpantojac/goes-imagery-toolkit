@@ -46,6 +46,7 @@ shapes:
   countries_layer: "countries"
 
 colors:
+  family: "default"            # Options: "default" (Oklahoma C13 + Regional), "noaa" (Official NOAA/NHC)
   visible: "grey255.cpt"
   infrared: "thermal.cpt"
   water_vapor: "WV.cpt"

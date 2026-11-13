@@ -121,7 +121,7 @@ except (ImportError, ModuleNotFoundError):
     HTTPAdapter = None
 
 import urllib3
-from typing import Optional, List, Union, Callable
+from typing import Optional, List, Union, Callable, Tuple, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
@@ -669,7 +669,13 @@ def download(dates: List[str], hours: List[str], minutes: List[str]) -> List[str
     """
     return download_and_pipeline(dates, hours, minutes, on_file_ready=None)                
 
-def auto_date(source: str, label: bool = False, watermark: Optional[str] = None, overwrite: bool = False) -> None:
+def auto_date(
+    source: str,
+    label: bool = False,
+    watermark: Optional[str] = None,
+    overwrite: bool = False,
+    family: Optional[str] = None
+) -> None:
     """
     Executes near-real-time automated observation retrieval and product generation.
 
@@ -678,12 +684,13 @@ def auto_date(source: str, label: bool = False, watermark: Optional[str] = None,
         label (bool, optional): If True, renders title bar, colorbar, and metadata. Defaults to False.
         watermark (Optional[str], optional): Custom institution or attribution watermark. Defaults to None.
         overwrite (bool, optional): If True, forces product re-generation. Defaults to False.
+        family (Optional[str], optional): Colormap enhancement family ('default' or 'noaa'). Defaults to None.
     """
     logging.info("Automated generation mode started")
     if source == 'aws':
-        source_AWS(label, watermark=watermark, overwrite=overwrite)
+        source_AWS(label, watermark=watermark, overwrite=overwrite, family=family)
     elif source == "ideam":
-        source_IDEAM(label, watermark=watermark, overwrite=overwrite)
+        source_IDEAM(label, watermark=watermark, overwrite=overwrite, family=family)
     else:
         logging.error(f"Unknown data source: {source}. Supported: aws | ideam")
 
@@ -738,7 +745,12 @@ def read_latest_downloaded() -> dict:
             return resultado
     return {}
 
-def source_IDEAM(label: bool = False, watermark: Optional[str] = None, overwrite: bool = False) -> None:
+def source_IDEAM(
+    label: bool = False,
+    watermark: Optional[str] = None,
+    overwrite: bool = False,
+    family: Optional[str] = None
+) -> None:
     """
     Scrapes and retrieves the most recent Level 1b imagery from the IDEAM regional HTTP archive.
 
@@ -746,6 +758,7 @@ def source_IDEAM(label: bool = False, watermark: Optional[str] = None, overwrite
         label (bool, optional): If True, renders metadata, colorbar, and title banner. Defaults to False.
         watermark (Optional[str], optional): Custom watermark or attribution string. Defaults to None.
         overwrite (bool, optional): If True, forces product re-generation. Defaults to False.
+        family (Optional[str], optional): Colormap enhancement family ('default' or 'noaa'). Defaults to None.
     """
     # Obtener el contenido de la página
     response = requests.get(base_url, verify=False)
@@ -787,11 +800,16 @@ def source_IDEAM(label: bool = False, watermark: Optional[str] = None, overwrite
                 logging.info(f"La imagen más reciente para {canal} ({archivo_mas_reciente}) ya fue descargada.")
 
     for aFile in archivos_descargados:
-        processImage(aFile, label=label, watermark=watermark, overwrite=overwrite)
+        processImage(aFile, label=label, watermark=watermark, overwrite=overwrite, family=family)
     
     write_latest_downloaded(ultima_descarga)
 
-def source_AWS(label: bool = False, watermark: Optional[str] = None, overwrite: bool = False) -> None:
+def source_AWS(
+    label: bool = False,
+    watermark: Optional[str] = None,
+    overwrite: bool = False,
+    family: Optional[str] = None
+) -> None:
     """
     Retrieves and processes the most recent GOES observation slot from NOAA's public AWS S3 bucket.
 
@@ -802,6 +820,7 @@ def source_AWS(label: bool = False, watermark: Optional[str] = None, overwrite: 
         label (bool, optional): If True, renders metadata, colorbar, and title banner. Defaults to False.
         watermark (Optional[str], optional): Custom watermark or attribution string. Defaults to None.
         overwrite (bool, optional): If True, forces product re-generation. Defaults to False.
+        family (Optional[str], optional): Colormap enhancement family ('default' or 'noaa'). Defaults to None.
     """
     utc = time.gmtime()
     tenMinutesAgo = time.time() - ( 60 * 10 )
@@ -841,13 +860,15 @@ def source_AWS(label: bool = False, watermark: Optional[str] = None, overwrite: 
     if enable_overlap:
         flist = download_and_pipeline(
             dates, hours, minutes,
-            on_file_ready=lambda f: processImage(f, label=label, watermark=watermark, overwrite=overwrite)
+            on_file_ready=lambda f: processImage(
+                f, label=label, watermark=watermark, overwrite=overwrite, family=family
+            )
         )
     else:
         flist = download(dates, hours, minutes)
         if flist:
             for aFile in flist:
-                processImage(aFile, label=label, watermark=watermark, overwrite=overwrite)
+                processImage(aFile, label=label, watermark=watermark, overwrite=overwrite, family=family)
 
     if not flist:
         logging.warning("No files were downloaded. The requested scan may not yet be published on NOAA S3.")
@@ -862,7 +883,8 @@ def manual_date(
     label: bool = False,
     bullseye: bool = True,
     watermark: Optional[str] = None,
-    overwrite: bool = False
+    overwrite: bool = False,
+    family: Optional[str] = None
 ) -> None:
     """
     Orchestrates manual, targeted satellite imagery generation for specific timestamps and coordinates.
@@ -878,6 +900,7 @@ def manual_date(
             If False, plots numbered waypoints (P1, P2, ...). Defaults to True.
         watermark (Optional[str], optional): Custom watermark or attribution string. Defaults to None.
         overwrite (bool, optional): If True, forces product re-generation. Defaults to False.
+        family (Optional[str], optional): Colormap enhancement family ('default' or 'noaa'). Defaults to None.
     """
     prepare_folders(dates)
 
@@ -888,14 +911,16 @@ def manual_date(
         flist = download_and_pipeline(
             dates, hours, minutes,
             on_file_ready=lambda f: processImage(
-                f, lat=lat, lon=lon, label=label, bullseye=bullseye, watermark=watermark, overwrite=overwrite
+                f, lat=lat, lon=lon, label=label, bullseye=bullseye, watermark=watermark, overwrite=overwrite, family=family
             )
         )
     else:
         flist = download(dates, hours, minutes)
         if flist:
             for aFile in flist:
-                processImage(aFile, lat, lon, label=label, bullseye=bullseye, watermark=watermark, overwrite=overwrite)
+                processImage(
+                    aFile, lat, lon, label=label, bullseye=bullseye, watermark=watermark, overwrite=overwrite, family=family
+                )
 
     if not flist:
         logging.warning("No files were downloaded for the specified dates and times.")
@@ -953,6 +978,98 @@ def get_bounding_box(lat: float, lon: float, radius_miles: float = 100) -> List[
 
     return [west, south, east, north]
 
+def resolve_colormap_and_limits(
+    band: int,
+    family: Optional[str] = None,
+    base_path: str = ""
+) -> Tuple[Any, float, float]:
+    """
+    Resolves the colormap and physical dynamic range [clim_min, clim_max] for a given ABI band
+    based on the configured enhancement family ('default' or 'noaa').
+
+    Priority lookup:
+    1. If family is specified (e.g. 'noaa' or 'default'):
+       - Checks `app/colors/{family}/ch{band:02d}.cpt`
+       - Checks `app/colors/ch{band:02d}_{family}.cpt`
+    2. Fallback to root `app/colors/ch{band:02d}.cpt`
+    3. Legacy fallback (colors.rainbow for C13, WV_red_black for C08-10, grey255 for C01-06, etc.)
+
+    Args:
+        band (int): Spectral channel number (1 to 16).
+        family (Optional[str], optional): Enhancement family identifier. Defaults to None.
+        base_path (str, optional): Base project directory path. Defaults to "".
+
+    Returns:
+        Tuple[Any, float, float]: (colormap, clim_min, clim_max)
+    """
+    if family is None:
+        family = _cfg_get('colors', 'family', 'enhancement_family', default='default')
+    norm_family = str(family).strip().lower()
+
+    # Dynamic limits per family
+    if norm_family == 'noaa':
+        if band <= 6:
+            clim_min, clim_max = 0.0, 1.0
+        elif band == 7:
+            clim_min, clim_max = -90.0, 130.0
+        elif 8 <= band <= 10:
+            clim_min, clim_max = -90.0, 20.0
+        elif 11 <= band <= 15:
+            clim_min, clim_max = -110.0, 55.0
+        else:  # Band 16
+            clim_min, clim_max = -120.0, 50.0
+    else:
+        # Default family limits
+        if band <= 6:
+            clim_min, clim_max = 0.0, 1.0
+        elif band == 7:
+            clim_min, clim_max = -112.15, 56.85
+        elif 8 <= band <= 10:
+            clim_min, clim_max = -85.0, -30.0
+        else:
+            clim_min, clim_max = -90.0, 50.0
+
+    colors_dir = os.path.join(base_path, config['paths']['colors'])
+
+    # Default family preservation for Band 13: Oklahoma Convective Rainbow
+    if norm_family == 'default' and band == 13 and colors and hasattr(colors, 'rainbow'):
+        return colors.rainbow, clim_min, clim_max
+
+    # Priority lookup candidates
+    candidates = [
+        os.path.join(colors_dir, norm_family, f"ch{band:02d}.cpt"),
+        os.path.join(colors_dir, f"ch{band:02d}_{norm_family}.cpt"),
+        os.path.join(colors_dir, f"ch{band:02d}.cpt"),
+    ]
+
+    for cand in candidates:
+        if os.path.exists(cand):
+            cpt_dict = loadCPT(cand)
+            if cpt_dict is not None and LinearSegmentedColormap is not None:
+                cpt_cmap = LinearSegmentedColormap(f'cpt_ch{band:02d}_{norm_family}', cpt_dict)
+                # In default family, WV palettes (8-10) were historically inverted
+                if norm_family != 'noaa' and 8 <= band <= 10:
+                    cpt_cmap = cpt_cmap.reversed()
+                return cpt_cmap, clim_min, clim_max
+
+    # Legacy fallbacks
+    cmap = None
+    if band <= 6:
+        cpt = loadCPT(os.path.join(colors_dir, "grey255.cpt"))
+        cmap = LinearSegmentedColormap('cpt', cpt) if (cpt and LinearSegmentedColormap) else 'gray'
+    elif band == 7:
+        cpt = loadCPT(os.path.join(colors_dir, "thermal.cpt"))
+        cmap = LinearSegmentedColormap('cpt', cpt) if (cpt and LinearSegmentedColormap) else 'inferno'
+    elif 8 <= band <= 10:
+        cpt = loadCPT(os.path.join(colors_dir, "WV_red_black.cpt"))
+        cmap = LinearSegmentedColormap('cpt', cpt).reversed() if (cpt and LinearSegmentedColormap) else 'viridis'
+    elif band == 13:
+        cmap = colors.rainbow if (colors and hasattr(colors, 'rainbow')) else 'rainbow'
+    else:
+        cmap = colors.rainbow if (colors and hasattr(colors, 'rainbow')) else 'rainbow'
+
+    return cmap, clim_min, clim_max
+
 def processImage(
     aFile: str,
     lat: Optional[Union[float, List[float]]] = None,
@@ -960,7 +1077,8 @@ def processImage(
     label: bool = False,
     bullseye: bool = True,
     watermark: Optional[str] = None,
-    overwrite: bool = False
+    overwrite: bool = False,
+    family: Optional[str] = None
 ) -> None:
     """
     Executes the scientific cartographic and raster processing pipeline for a GOES ABI NetCDF file.
@@ -986,11 +1104,13 @@ def processImage(
         bullseye (bool, optional): If True, draws concentric nautical-mile range rings. Defaults to True.
         watermark (Optional[str], optional): Custom institution or attribution banner. Defaults to None.
         overwrite (bool, optional): If True, re-renders products even if they exist. Defaults to False.
+        family (Optional[str], optional): Colormap enhancement family ('default' or 'noaa'). Defaults to None.
 
     Returns:
         None
     """
-    matplotlib.rcParams['figure.dpi'] = 100
+    if matplotlib is not None:
+        matplotlib.rcParams['figure.dpi'] = 100
 
     Start = (aFile[aFile.find("_s")+2:aFile.find("_e")])
 
@@ -1164,48 +1284,8 @@ def processImage(
     data_for_png = data  # Use the original data array
 
     im = ax.imshow(data_for_png, origin='upper', extent=norm_extent, interpolation='bilinear', aspect='equal', zorder=1)
-    colors_dir = os.path.join(basePath, config['paths']['colors'])
-    cpt_name = f"ch{Band:02d}.cpt"
-    cpt_path = os.path.join(colors_dir, cpt_name)
-
-    # Physical dynamic limits per ABI band category
-    if Band <= 6:
-        clim_min, clim_max = 0.0, 1.0
-    elif Band == 7:
-        clim_min, clim_max = -112.15, 56.85
-    elif 8 <= Band <= 10:
-        clim_min, clim_max = -85.0, -30.0
-    else:  # Bands 11 through 16
-        clim_min, clim_max = -90.0, 50.0
-
-    cmap_applied = False
-    if Band == 13 and colors and hasattr(colors, 'rainbow'):
-        # Canal 13: Realce Oklahoma nativo (colors.rainbow)
-        im.set_cmap(colors.rainbow)
-        cmap_applied = True
-    elif os.path.exists(cpt_path):
-        cpt_dict = loadCPT(cpt_path)
-        if cpt_dict is not None:
-            cpt_cmap = LinearSegmentedColormap(f'cpt_ch{Band:02d}', cpt_dict)
-            if 8 <= Band <= 10:
-                cpt_cmap = cpt_cmap.reversed()
-            im.set_cmap(cpt_cmap)
-            cmap_applied = True
-
-    if not cmap_applied:
-        # Fallback to legacy defaults if specific chXX.cpt is missing
-        if Band <= 6:
-            cpt = loadCPT(os.path.join(colors_dir, "grey255.cpt"))
-            im.set_cmap(LinearSegmentedColormap('cpt', cpt) if cpt else 'gray')
-        elif Band == 7:
-            cpt = loadCPT(os.path.join(colors_dir, "thermal.cpt"))
-            im.set_cmap(LinearSegmentedColormap('cpt', cpt) if cpt else 'inferno')
-        elif 8 <= Band <= 10:
-            cpt = loadCPT(os.path.join(colors_dir, "WV_red_black.cpt"))
-            im.set_cmap(LinearSegmentedColormap('cpt', cpt).reversed() if cpt else 'viridis')
-        else:
-            im.set_cmap(colors.rainbow if (colors and hasattr(colors, 'rainbow')) else 'rainbow')
-
+    cpt_cmap, clim_min, clim_max = resolve_colormap_and_limits(Band, family=family, base_path=basePath)
+    im.set_cmap(cpt_cmap)
     im.set_clim(clim_min, clim_max)
 
     ax.set_xlim(0, data.shape[1])
@@ -1580,6 +1660,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=bool(_cfg_get('general', 'overwrite', 'overwrite_images', default=False)),
         help='Force re-generation of products even if they already exist in output/ (True/False)'
     )
+    parser.add_argument(
+        '--family', '--palette', '--enhancement',
+        dest='family',
+        type=str,
+        default=str(_cfg_get('colors', 'family', 'enhancement_family', default='default')),
+        help="Colormap enhancement family ('default' or 'noaa'). Defaults to 'default'."
+    )
     return parser
 
 def main(argv: Optional[List[str]] = None) -> None:
@@ -1680,11 +1767,18 @@ def main(argv: Optional[List[str]] = None) -> None:
                 args.label,
                 args.bullseye,
                 watermark=args.watermark,
-                overwrite=args.overwrite
+                overwrite=args.overwrite,
+                family=args.family
             )
 
     elif args.mode == "auto":
-        auto_date(args.source, args.label, watermark=args.watermark, overwrite=args.overwrite)
+        auto_date(
+            args.source,
+            args.label,
+            watermark=args.watermark,
+            overwrite=args.overwrite,
+            family=args.family
+        )
 
     else:
         logging.error('Unknown execution mode: %s. Use: manual | auto', args.mode)

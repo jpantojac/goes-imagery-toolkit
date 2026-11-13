@@ -176,6 +176,87 @@ class TestCalibrationAndGeometry(unittest.TestCase):
                 self.assertIn("green", cpt_dict)
                 self.assertIn("blue", cpt_dict)
 
+    def test_enhancement_families_exist_and_load(self):
+        """Verifica la existencia y validez de las familias 'default' y 'noaa' con sus 16 canales."""
+        colors_dir = os.path.join(APP_DIR, "colors")
+        for family in ["default", "noaa"]:
+            fam_dir = os.path.join(colors_dir, family)
+            self.assertTrue(os.path.isdir(fam_dir), f"Directorio de familia {family} no existe: {fam_dir}")
+            for band in range(1, 17):
+                fam_cpt = os.path.join(fam_dir, f"ch{band:02d}.cpt")
+                self.assertTrue(os.path.exists(fam_cpt), f"Falta CPT para {family}/ch{band:02d}.cpt")
+                if main.loadCPT is not None:
+                    cpt_dict = main.loadCPT(fam_cpt)
+                    self.assertIsNotNone(cpt_dict, f"Error cargando CPT {fam_cpt}")
+                    self.assertIn("red", cpt_dict)
+
+        # Verificar sufijos híbridos _noaa.cpt
+        for band in range(1, 17):
+            suffix_cpt = os.path.join(colors_dir, f"ch{band:02d}_noaa.cpt")
+            self.assertTrue(os.path.exists(suffix_cpt), f"Falta CPT con sufijo: {suffix_cpt}")
+
+    def test_resolve_colormap_and_limits_default(self):
+        """Verifica la resolución de paletas y rangos para la familia por defecto (Oklahoma en C13)."""
+        # C13 en default debe preservar la paleta Oklahoma (colors.rainbow) y rango [-90, 50]
+        cmap13, cmin13, cmax13 = main.resolve_colormap_and_limits(13, family="default", base_path=APP_DIR)
+        self.assertEqual(cmin13, -90.0)
+        self.assertEqual(cmax13, 50.0)
+        if main.colors and hasattr(main.colors, 'rainbow'):
+            self.assertEqual(cmap13, main.colors.rainbow)
+
+        # C01 visible: [0.0, 1.0]
+        _, cmin01, cmax01 = main.resolve_colormap_and_limits(1, family="default", base_path=APP_DIR)
+        self.assertEqual(cmin01, 0.0)
+        self.assertEqual(cmax01, 1.0)
+
+        # C09 vapor de agua default: [-85.0, -30.0]
+        _, cmin09, cmax09 = main.resolve_colormap_and_limits(9, family="default", base_path=APP_DIR)
+        self.assertEqual(cmin09, -85.0)
+        self.assertEqual(cmax09, -30.0)
+
+    def test_resolve_colormap_and_limits_noaa(self):
+        """Verifica la resolución de paletas y rangos para la familia oficial 'noaa' (goes.noaa.gov)."""
+        # C01..C06 reflectancia NOAA: [0.0, 1.0]
+        _, cmin01, cmax01 = main.resolve_colormap_and_limits(1, family="noaa", base_path=APP_DIR)
+        self.assertEqual(cmin01, 0.0)
+        self.assertEqual(cmax01, 1.0)
+
+        # C07 onda corta / incendios NOAA: [-90.0, 130.0]
+        _, cmin07, cmax07 = main.resolve_colormap_and_limits(7, family="noaa", base_path=APP_DIR)
+        self.assertEqual(cmin07, -90.0)
+        self.assertEqual(cmax07, 130.0)
+
+        # C08..C10 vapor de agua NOAA: [-90.0, 20.0]
+        _, cmin09, cmax09 = main.resolve_colormap_and_limits(9, family="noaa", base_path=APP_DIR)
+        self.assertEqual(cmin09, -90.0)
+        self.assertEqual(cmax09, 20.0)
+
+        # C11..C15 infrarrojo térmico NOAA: [-110.0, 55.0]
+        cmap13, cmin13, cmax13 = main.resolve_colormap_and_limits(13, family="noaa", base_path=APP_DIR)
+        self.assertEqual(cmin13, -110.0)
+        self.assertEqual(cmax13, 55.0)
+        # En NOAA, C13 no debe ser el colors.rainbow estático
+        if main.colors and hasattr(main.colors, 'rainbow'):
+            self.assertNotEqual(cmap13, main.colors.rainbow)
+
+        # C16 CO2 NOAA: [-120.0, 50.0]
+        _, cmin16, cmax16 = main.resolve_colormap_and_limits(16, family="noaa", base_path=APP_DIR)
+        self.assertEqual(cmin16, -120.0)
+        self.assertEqual(cmax16, 50.0)
+
+    def test_cli_parser_enhancement_family_flag(self):
+        """Verifica que el parser acepte --family, --palette y --enhancement."""
+        parser = main.build_parser()
+
+        args1 = parser.parse_args(["--mode=auto", "--source=aws", "--family=noaa"])
+        self.assertEqual(args1.family, "noaa")
+
+        args2 = parser.parse_args(["--mode=auto", "--source=aws", "--palette=default"])
+        self.assertEqual(args2.family, "default")
+
+        args3 = parser.parse_args(["--mode=auto", "--source=aws", "--enhancement=noaa"])
+        self.assertEqual(args3.family, "noaa")
+
 
 if __name__ == "__main__":
     unittest.main()
