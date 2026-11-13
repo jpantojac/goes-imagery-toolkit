@@ -377,10 +377,6 @@ def prepare_folders(dates: List[str]) -> None:
     Args:
         dates (List[str]): List of date strings in 'YYYYMMDD' format.
     """
-    global fechas_julianas
-    #global basePath 
-    #basePath = os.getcwd()
-    # Itera sobre las fechas y conviértelas a formato juliano
     for fecha in dates:
         fecha_dt = datetime.strptime(fecha, "%Y%m%d")
         fecha_juliana = fecha_dt.strftime("%j")  # %j es el formato para el día del año
@@ -567,25 +563,6 @@ def source_IDEAM(label: bool = False, watermark: Optional[str] = None) -> None:
     
     write_latest_downloaded(ultima_descarga)
 
-# Función para leer el archivo de registro de la última descarga
-def read_latest_downloaded():
-    """
-    Lee el archivo de registro de las últimas descargas realizadas.
-
-    Returns:
-        dict: Diccionario con el canal como clave y el nombre del último archivo descargado como valor.
-    """
-    if os.path.exists(archivo_registro):
-        with open(archivo_registro, 'r') as f:
-            resultado = {}
-            for line in f:
-                line = line.strip()
-                if '=' in line:  # Verificar que la línea tenga el formato esperado
-                    clave, valor = line.split('=', 1)  # Solo hacer split en el primer '='
-                    resultado[clave] = valor
-            return resultado
-    return {}
-
 def source_AWS(label: bool = False, watermark: Optional[str] = None) -> None:
     """
     Retrieves and processes the most recent GOES observation slot from NOAA's public AWS S3 bucket.
@@ -661,7 +638,6 @@ def manual_date(
             If False, plots numbered waypoints (P1, P2, ...). Defaults to True.
         watermark (Optional[str], optional): Custom watermark or attribution string. Defaults to None.
     """
-    global fechas_julianas
     prepare_folders(dates)
     flist = download(dates,hours,minutes)
 
