@@ -117,7 +117,8 @@ except (ImportError, ModuleNotFoundError):
     BeautifulSoup = None
 
 import urllib3
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     from PIL import Image
@@ -379,20 +380,196 @@ def prepare_folders(dates: List[str]) -> None:
     """
     for fecha in dates:
         fecha_dt = datetime.strptime(fecha, "%Y%m%d")
-        fecha_juliana = fecha_dt.strftime("%j")  # %j es el formato para el día del año
-        fechas_julianas.append(fecha_juliana)
+        fecha_juliana = fecha_dt.strftime("%j")
+        if fecha_juliana not in fechas_julianas:
+            fechas_julianas.append(fecha_juliana)
 
     for fecha in fechas_julianas:
-        create_folder(os.path.join(basePath,config['paths']['input'],fecha),False)    
-        create_folder(os.path.join(basePath,config['paths']['output'],fecha),False)    
+        create_folder(os.path.join(basePath, config['paths']['input'], fecha), False)
+        create_folder(os.path.join(basePath, config['paths']['output'], fecha), False)
+
+def _download_channel_slot(
+    ch: Union[str, int],
+    date: str,
+    hour: str,
+    minute: str,
+    dsat: str,
+    output_dir: str
+) -> List[str]:
+    """
+    Downloads or resolves a single GOES ABI spectral channel file for a specific observation slot.
+
+    First verifies if a locally matching file already exists in output_dir (cache hit).
+    If absent, queries NOAA AWS S3 via GOES.download with strict temporal boundaries.
+
+    Args:
+        ch (Union[str, int]): Spectral channel identifier (e.g. '01', 1, '13').
+        date (str): Date in 'YYYYMMDD' format.
+        hour (str): UTC hour in 'HH' format.
+        minute (str): UTC minute in 'MM' format.
+        dsat (str): GOES satellite string (e.g. 'goes19').
+        output_dir (str): Destination directory for NetCDF files.
+
+    Returns:
+        List[str]: List of resolved local NetCDF file paths (empty list if download failed).
+    """
+    ch_str = f"{int(ch):02d}"
+    fecha_dt = datetime.strptime(date, "%Y%m%d")
+    fecha_hora = datetime.strptime(f"{date}-{hour}{minute}00", '%Y%m%d-%H%M%S')
+    nueva_fecha_hora = min(
+        fecha_hora + timedelta(minutes=5),
+        fecha_hora.replace(minute=55, second=0)
+    )
+    dateend = nueva_fecha_hora.strftime('%Y%m%d-%H%M00')
+    prefix_match = f"s{fecha_dt.strftime('%Y%j')}{hour}{minute}"
+    ch_tag = f"C{ch_str}"
+
+    # 1. Local cache hit check (avoids redundant S3 queries)
+    if os.path.exists(output_dir):
+        existing = [
+            os.path.join(output_dir, f) for f in os.listdir(output_dir)
+            if f.endswith('.nc') and prefix_match in f and ch_tag in f
+        ]
+        if existing:
+            logging.info(
+                f"[Cache Hit] Channel {ch_str} already exists locally: {os.path.basename(existing[0])}"
+            )
+            return existing
+
+    # 2. Query and download from NOAA S3 via GOES
+    flist = []
+    if GOES is not None:
+        try:
+            logging.info(f"Downloading Channel {ch_str} for {date} {hour}:{minute} UTC...")
+            flist = GOES.download(
+                dsat,
+                'ABI-L1b-RadF',
+                DateTimeIni=f"{date}-{hour}{minute}00",
+                DateTimeFin=dateend,
+                channel=[ch_str],
+                path_out=output_dir,
+                show_download_progress=False
+            )
+        except FileNotFoundError as fnf_err:
+            logging.warning(f"S3 remote directory not found for channel {ch_str} ({date} {hour}:{minute} UTC): {fnf_err}")
+        except Exception as dl_err:
+            logging.warning(f"Error querying GOES data for channel {ch_str} ({date} {hour}:{minute} UTC): {dl_err}")
+
+    if flist:
+        for f in flist:
+            logging.info(f"Downloaded Channel {ch_str}: {os.path.basename(f)}")
+        return flist
+
+    # 3. Fallback disk check in case file was saved without returning path
+    if os.path.exists(output_dir):
+        existing = [
+            os.path.join(output_dir, f) for f in os.listdir(output_dir)
+            if f.endswith('.nc') and prefix_match in f and ch_tag in f
+        ]
+        if existing:
+            return existing
+
+    return []
+
+def _build_download_tasks(
+    dates: List[str],
+    hours: List[str],
+    minutes: List[str]
+) -> List[tuple]:
+    """
+    Constructs the sequence of download task specifications for each channel and timestamp.
+
+    Args:
+        dates (List[str]): List of observation dates in 'YYYYMMDD' format.
+        hours (List[str]): List of UTC hours in 'HH' format.
+        minutes (List[str]): List of UTC minutes in 'MM' format.
+
+    Returns:
+        List[tuple]: List of task parameter tuples (ch, date, hour, minute, dsat, output_dir).
+    """
+    tasks = []
+    for date in dates:
+        fecha_dt = datetime.strptime(date, "%Y%m%d")
+        fecha_juliana = fecha_dt.strftime("%j")
+        output = os.path.join(basePath, config['paths']['input'], fecha_juliana).rstrip(os.sep) + os.sep
+        for hour in hours:
+            for minute in minutes:
+                for ch in channels:
+                    tasks.append((ch, date, hour, minute, dsatellite, output))
+    return tasks
+
+def download_and_pipeline(
+    dates: List[str],
+    hours: List[str],
+    minutes: List[str],
+    on_file_ready: Optional[Callable[[str], None]] = None
+) -> List[str]:
+    """
+    Concurrent multi-threaded downloader with asynchronous producer-consumer pipelining.
+
+    Retrieves requested GOES spectral channels in parallel using ThreadPoolExecutor.
+    If on_file_ready is provided and pipeline overlap is enabled in config.yaml, completed
+    files are immediately dispatched to on_file_ready (e.g. processImage) so network I/O
+    and CPU image rendering overlap seamlessly.
+
+    Args:
+        dates (List[str]): List of target observation dates in 'YYYYMMDD' format.
+        hours (List[str]): List of UTC target hours in 'HH' format (00-23).
+        minutes (List[str]): List of target minutes in 'MM' format (00-59).
+        on_file_ready (Optional[Callable[[str], None]], optional): Callback executed as soon
+            as an individual NetCDF file is ready on disk. Defaults to None.
+
+    Returns:
+        List[str]: Complete list of all downloaded or resolved NetCDF file paths.
+    """
+    max_workers_cfg = _cfg_get('performance', 'max_download_workers', default=4)
+    try:
+        max_workers = int(max_workers_cfg) if max_workers_cfg else 4
+    except (ValueError, TypeError):
+        max_workers = 4
+
+    overlap_cfg = _cfg_get('performance', 'enable_pipeline_overlap', default=True)
+    enable_overlap = bool(overlap_cfg) if overlap_cfg is not None else True
+
+    tasks = _build_download_tasks(dates, hours, minutes)
+    if not tasks:
+        return []
+
+    fulllist = []
+    pool_workers = min(max_workers, len(tasks))
+    logging.info(
+        f"Starting download of {len(tasks)} file(s) across {len(channels)} channel(s) "
+        f"with {pool_workers} concurrent worker(s) (overlap={enable_overlap})."
+    )
+
+    futures_map = {}
+    with ThreadPoolExecutor(max_workers=pool_workers) as executor:
+        for ch, date, hour, minute, dsat, output_dir in tasks:
+            fut = executor.submit(_download_channel_slot, ch, date, hour, minute, dsat, output_dir)
+            futures_map[fut] = (ch, date, hour, minute)
+
+        for fut in as_completed(futures_map):
+            ch, date, hour, minute = futures_map[fut]
+            try:
+                files = fut.result()
+                if files:
+                    for aFile in files:
+                        fulllist.append(aFile)
+                        if enable_overlap and on_file_ready is not None:
+                            try:
+                                on_file_ready(aFile)
+                            except Exception as proc_err:
+                                logging.error(f"Error processing file {aFile} in pipeline: {proc_err}")
+            except Exception as err:
+                logging.error(f"Download task failed for Channel {ch} ({date} {hour}:{minute}): {err}")
+
+    return fulllist
 
 def download(dates: List[str], hours: List[str], minutes: List[str]) -> List[str]:
     """
     Retrieves NOAA GOES Level 1b Radiance (ABI-L1b-RadF) NetCDF files from AWS S3.
 
-    Queries hourly cloud storage prefixes with minute-level precision, enforcing
-    temporal bounds to prevent S3 prefix overshoot. Automatically falls back
-    to pre-existing local files if already downloaded in previous sessions.
+    Wrapper over download_and_pipeline maintaining backward compatibility for legacy callers.
 
     Args:
         dates (List[str]): List of target observation dates in 'YYYYMMDD' format.
@@ -402,46 +579,7 @@ def download(dates: List[str], hours: List[str], minutes: List[str]) -> List[str
     Returns:
         List[str]: List of filesystem paths to the downloaded or resolved NetCDF files.
     """
-    fulllist = []
-    for date in dates:
-        for hour in hours:
-            for minute in minutes:
-                fecha_hora = datetime.strptime(date+"-"+hour+minute+'00', '%Y%m%d-%H%M%S')
-                # Stay strictly within the requested slot with 00 seconds so GOES.download
-                # does not overshoot by 1 hour due to second-precision comparisons.
-                nueva_fecha_hora = min(
-                    fecha_hora + timedelta(minutes=5),
-                    fecha_hora.replace(minute=55, second=0)
-                )
-                dateend = nueva_fecha_hora.strftime('%Y%m%d-%H%M00')
-                fecha_dt = datetime.strptime(date, "%Y%m%d")
-                fecha_juliana = fecha_dt.strftime("%j")
-                output = (os.path.join(basePath, config['paths']['input'], fecha_juliana).rstrip(os.sep)+ os.sep)
-                flist = []
-                try:
-                    flist = GOES.download(dsatellite, 'ABI-L1b-RadF',
-                                DateTimeIni = date+"-"+hour+minute+'00', 
-                                DateTimeFin = dateend, 
-                                channel = channels, 
-                                path_out=output)
-                except FileNotFoundError as fnf_err:
-                    logging.warning(f"S3 remote directory not found for {date} {hour}:{minute} UTC: {fnf_err}")
-                except Exception as dl_err:
-                    logging.warning(f"Error querying GOES data for {date} {hour}:{minute} UTC: {dl_err}")
-
-                if flist:
-                    fulllist += flist
-                elif os.path.exists(output):
-                    # Fallback: check if files were already downloaded in this slot
-                    prefix_match = f"s{fecha_dt.strftime('%Y%j')}{hour}{minute}"
-                    existing = [
-                        os.path.join(output, f) for f in os.listdir(output)
-                        if f.endswith('.nc') and prefix_match in f
-                    ]
-                    if existing:
-                        logging.info(f"Using {len(existing)} pre-downloaded files from {output} for {date} {hour}:{minute}")
-                        fulllist += existing
-    return fulllist                
+    return download_and_pipeline(dates, hours, minutes, on_file_ready=None)                
 
 def auto_date(source: str, label: bool = False, watermark: Optional[str] = None) -> None:
     """
@@ -605,14 +743,24 @@ def source_AWS(label: bool = False, watermark: Optional[str] = None) -> None:
     hours.append(hour)
     minutes.append(minute)
     prepare_folders(dates)
-    flist = download(dates,hours,minutes)
+
+    overlap_cfg = _cfg_get('performance', 'enable_pipeline_overlap', default=True)
+    enable_overlap = bool(overlap_cfg) if overlap_cfg is not None else True
+
+    if enable_overlap:
+        flist = download_and_pipeline(
+            dates, hours, minutes,
+            on_file_ready=lambda f: processImage(f, label=label, watermark=watermark)
+        )
+    else:
+        flist = download(dates, hours, minutes)
+        if flist:
+            for aFile in flist:
+                processImage(aFile, label=label, watermark=watermark)
 
     if not flist:
         logging.warning("No files were downloaded. The requested scan may not yet be published on NOAA S3.")
         return
-
-    for aFile in flist:
-        processImage(aFile, label=label, watermark=watermark)
 
 def manual_date(
     dates: List[str],
@@ -639,14 +787,26 @@ def manual_date(
         watermark (Optional[str], optional): Custom watermark or attribution string. Defaults to None.
     """
     prepare_folders(dates)
-    flist = download(dates,hours,minutes)
+
+    overlap_cfg = _cfg_get('performance', 'enable_pipeline_overlap', default=True)
+    enable_overlap = bool(overlap_cfg) if overlap_cfg is not None else True
+
+    if enable_overlap:
+        flist = download_and_pipeline(
+            dates, hours, minutes,
+            on_file_ready=lambda f: processImage(
+                f, lat=lat, lon=lon, label=label, bullseye=bullseye, watermark=watermark
+            )
+        )
+    else:
+        flist = download(dates, hours, minutes)
+        if flist:
+            for aFile in flist:
+                processImage(aFile, lat, lon, label=label, bullseye=bullseye, watermark=watermark)
 
     if not flist:
         logging.warning("No files were downloaded for the specified dates and times.")
         return
-          
-    for aFile in flist:
-        processImage(aFile, lat, lon, label=label, bullseye=bullseye, watermark=watermark)
 
 def get_band(nombre_archivo: str, isString: bool) -> Union[int, str, None]:
     """
@@ -1042,6 +1202,7 @@ def processImage(aFile: str, lat: Optional[Union[float, List[float]]] = None, lo
     imageOut_latest = os.path.join(outFolder, "latestC" + BandString + ".png")
     logging.debug("Imagen latest: %s", imageOut_latest)
     plt.savefig(imageOut_latest, dpi=DPI, pad_inches=0)
+    plt.close(fig)
 
     # Calculate resolutions based on the full data shape
     resl_x = abs(extent[3] - extent[1]) / (data.shape[0] -1)  # Latitude resolution

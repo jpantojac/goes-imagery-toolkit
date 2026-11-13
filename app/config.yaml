@@ -55,3 +55,7 @@ plotting:
     - -14  #S
     - -50  #E
     - 30   #N
+
+performance:
+  max_download_workers: 4       # Concurrent download worker threads (recommended: 4 to 8)
+  enable_pipeline_overlap: true  # Concurrently trigger image processing as downloads complete
