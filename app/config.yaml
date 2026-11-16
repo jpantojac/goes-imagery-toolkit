@@ -29,7 +29,7 @@ satellite:
     - "C09"
     - "C13"
   base_url: "https://bart.ideam.gov.co/ospa/sensores/pasivos/satelite/GOES19/RAW/"
-  satellite: "G19"
+  satellite: "auto"  # "auto" (G16 before April 2025, G19 after), or explicit "G16" / "G19"
 
 paths:
   base: ""  # Leave empty to dynamically resolve project root

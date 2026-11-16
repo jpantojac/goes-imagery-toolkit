@@ -319,6 +319,46 @@ class TestCalibrationAndGeometry(unittest.TestCase):
         args2 = parser.parse_args(["--mode=auto", "--source=aws", "--c16-color=false"])
         self.assertFalse(args2.c16_enhanced)
 
+    def test_resolve_satellite_automatic_temporal(self):
+        """Verifica la resolución automática de satélite según la fecha (G16 antes del 7-abr-2025, G19 después)."""
+        # Fechas históricas en era GOES-16
+        code1, dsat1 = main.resolve_satellite("20240929")
+        self.assertEqual(code1, "G16")
+        self.assertEqual(dsat1, "goes16")
+
+        code2, dsat2 = main.resolve_satellite("20250406")
+        self.assertEqual(code2, "G16")
+        self.assertEqual(dsat2, "goes16")
+
+        # Transición operacional GOES-East (7 de abril de 2025) en adelante
+        code3, dsat3 = main.resolve_satellite("20250407")
+        self.assertEqual(code3, "G19")
+        self.assertEqual(dsat3, "goes19")
+
+        code4, dsat4 = main.resolve_satellite("20261113")
+        self.assertEqual(code4, "G19")
+        self.assertEqual(dsat4, "goes19")
+
+    def test_resolve_satellite_explicit_override(self):
+        """Verifica que un override explícito tenga prioridad sobre la fecha."""
+        code1, dsat1 = main.resolve_satellite("20261113", override_sat="G16")
+        self.assertEqual(code1, "G16")
+        self.assertEqual(dsat1, "goes16")
+
+        code2, dsat2 = main.resolve_satellite("20240929", override_sat="G19")
+        self.assertEqual(code2, "G19")
+        self.assertEqual(dsat2, "goes19")
+
+    def test_cli_parser_satellite_flag(self):
+        """Verifica que el parser acepte --satellite y --sat."""
+        parser = main.build_parser()
+
+        args1 = parser.parse_args(["--mode=auto", "--source=aws", "--satellite=G16"])
+        self.assertEqual(args1.satellite, "G16")
+
+        args2 = parser.parse_args(["--mode=auto", "--source=aws", "--sat=G19"])
+        self.assertEqual(args2.satellite, "G19")
+
 
 if __name__ == "__main__":
     unittest.main()

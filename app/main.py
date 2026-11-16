@@ -210,10 +210,49 @@ sat_section         = config.get('satellite', config.get('satelite', {}))
 channels            = sat_section.get('channels', ["01", "09", "13"])
 channelsIdeam       = sat_section.get('channels_ideam', ["C01", "C09", "C13"])
 base_url            = sat_section.get('base_url', "https://bart.ideam.gov.co/ospa/sensores/pasivos/satelite/GOES19/RAW/")
-satellite           = sat_section.get('satellite', "G19")
+satellite           = sat_section.get('satellite', "auto")
+
+def resolve_satellite(date_str: str, override_sat: Optional[str] = None) -> Tuple[str, str]:
+    """
+    Resolves the operational GOES satellite identifier ('G16' or 'G19') and AWS bucket name
+    ('goes16' or 'goes19') based on the target observation date or an explicit CLI/config override.
+
+    Operational Transition Timeline:
+        - Prior to April 7, 2025: GOES-East is GOES-16 ('G16' / 'noaa-goes16').
+        - From April 7, 2025 onwards: GOES-East is GOES-19 ('G19' / 'noaa-goes19').
+
+    Args:
+        date_str (str): Target observation date in 'YYYYMMDD' format.
+        override_sat (Optional[str], optional): Explicit satellite code ('G16', 'G19', 'auto', etc.). Defaults to None.
+
+    Returns:
+        Tuple[str, str]: (satellite_code, goes_download_name), e.g. ('G16', 'goes16') or ('G19', 'goes19').
+    """
+    sat_cand = override_sat if override_sat is not None else _cfg_get('satellite', 'satellite', default='auto')
+    sat_str = str(sat_cand).strip()
+
+    if sat_str.lower() != 'auto':
+        sat_upper = sat_str.upper()
+        if sat_upper.startswith('G'):
+            dsat = 'goes' + sat_upper[1:]
+            return sat_upper, dsat.lower()
+        if sat_str.lower().startswith('goes'):
+            code = 'G' + sat_str.lower().replace('goes', '')
+            return code, sat_str.lower()
+        return sat_upper, sat_str.lower()
+
+    # Automatic temporal resolution based on GOES-East operational transition (April 7, 2025)
+    try:
+        dt = datetime.strptime(date_str, "%Y%m%d")
+        if dt < datetime(2025, 4, 7):
+            return "G16", "goes16"
+        else:
+            return "G19", "goes19"
+    except Exception:
+        return "G19", "goes19"
 
 # Globales
-dsatellite = satellite.replace('G','goes')
+dsatellite = satellite.replace('G','goes') if satellite != 'auto' else 'goes19'
 ncFile = None
 fechas_julianas = []
 
@@ -577,35 +616,40 @@ def _download_channel_slot(
 def _build_download_tasks(
     dates: List[str],
     hours: List[str],
-    minutes: List[str]
+    minutes: List[str],
+    satellite_override: Optional[str] = None
 ) -> List[tuple]:
     """
-    Constructs the sequence of download task specifications for each channel and timestamp.
+    Constructs the sequence of download task specifications for each channel and timestamp,
+    dynamically resolving the operational satellite (G16 vs G19) for each target date.
 
     Args:
         dates (List[str]): List of observation dates in 'YYYYMMDD' format.
         hours (List[str]): List of UTC hours in 'HH' format.
         minutes (List[str]): List of UTC minutes in 'MM' format.
+        satellite_override (Optional[str], optional): Explicit satellite identifier. Defaults to None.
 
     Returns:
         List[tuple]: List of task parameter tuples (ch, date, hour, minute, dsat, output_dir).
     """
     tasks = []
     for date in dates:
+        sat_code, dsat = resolve_satellite(date, satellite_override)
         fecha_dt = datetime.strptime(date, "%Y%m%d")
         fecha_juliana = fecha_dt.strftime("%j")
         output = os.path.join(basePath, config['paths']['input'], fecha_juliana).rstrip(os.sep) + os.sep
         for hour in hours:
             for minute in minutes:
                 for ch in channels:
-                    tasks.append((ch, date, hour, minute, dsatellite, output))
+                    tasks.append((ch, date, hour, minute, dsat, output))
     return tasks
 
 def download_and_pipeline(
     dates: List[str],
     hours: List[str],
     minutes: List[str],
-    on_file_ready: Optional[Callable[[str], None]] = None
+    on_file_ready: Optional[Callable[[str], None]] = None,
+    satellite: Optional[str] = None
 ) -> List[str]:
     """
     Concurrent multi-threaded downloader with asynchronous producer-consumer pipelining.
@@ -621,6 +665,7 @@ def download_and_pipeline(
         minutes (List[str]): List of target minutes in 'MM' format (00-59).
         on_file_ready (Optional[Callable[[str], None]], optional): Callback executed as soon
             as an individual NetCDF file is ready on disk. Defaults to None.
+        satellite (Optional[str], optional): Explicit satellite override (G16, G19, auto). Defaults to None.
 
     Returns:
         List[str]: Complete list of all downloaded or resolved NetCDF file paths.
@@ -634,7 +679,7 @@ def download_and_pipeline(
     overlap_cfg = _cfg_get('performance', 'enable_pipeline_overlap', default=True)
     enable_overlap = bool(overlap_cfg) if overlap_cfg is not None else True
 
-    tasks = _build_download_tasks(dates, hours, minutes)
+    tasks = _build_download_tasks(dates, hours, minutes, satellite_override=satellite)
     if not tasks:
         return []
 
@@ -668,7 +713,12 @@ def download_and_pipeline(
 
     return fulllist
 
-def download(dates: List[str], hours: List[str], minutes: List[str]) -> List[str]:
+def download(
+    dates: List[str],
+    hours: List[str],
+    minutes: List[str],
+    satellite: Optional[str] = None
+) -> List[str]:
     """
     Retrieves NOAA GOES Level 1b Radiance (ABI-L1b-RadF) NetCDF files from AWS S3.
 
@@ -678,10 +728,13 @@ def download(dates: List[str], hours: List[str], minutes: List[str]) -> List[str
         dates (List[str]): List of target observation dates in 'YYYYMMDD' format.
         hours (List[str]): List of UTC target hours in 'HH' format (00-23).
         minutes (List[str]): List of target minutes in 'MM' format (00-59).
+        satellite (Optional[str], optional): Explicit satellite identifier (G16, G19, auto). Defaults to None.
 
     Returns:
         List[str]: List of filesystem paths to the downloaded or resolved NetCDF files.
     """
+    if satellite is not None:
+        return download_and_pipeline(dates, hours, minutes, on_file_ready=None, satellite=satellite)
     return download_and_pipeline(dates, hours, minutes, on_file_ready=None)                
 
 def auto_date(
@@ -691,7 +744,8 @@ def auto_date(
     overwrite: bool = False,
     family: Optional[str] = None,
     borders: bool = True,
-    max_dim: Optional[int] = None
+    max_dim: Optional[int] = None,
+    satellite: Optional[str] = None
 ) -> None:
     """
     Executes near-real-time automated observation retrieval and product generation.
@@ -704,10 +758,11 @@ def auto_date(
         family (Optional[str], optional): Colormap enhancement family ('default' or 'noaa'). Defaults to None.
         borders (bool, optional): If True, draws administrative borders / croquis. Defaults to True.
         max_dim (Optional[int], optional): Max pixel dimension or 0 for uncompressed native. Defaults to None.
+        satellite (Optional[str], optional): Explicit satellite override (G16, G19, auto). Defaults to None.
     """
     logging.info("Automated generation mode started")
     if source == 'aws':
-        source_AWS(label, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim)
+        source_AWS(label, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim, satellite=satellite)
     elif source == "ideam":
         source_IDEAM(label, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim)
     else:
@@ -833,7 +888,8 @@ def source_AWS(
     overwrite: bool = False,
     family: Optional[str] = None,
     borders: bool = True,
-    max_dim: Optional[int] = None
+    max_dim: Optional[int] = None,
+    satellite: Optional[str] = None
 ) -> None:
     """
     Retrieves and processes the most recent GOES observation slot from NOAA's public AWS S3 bucket.
@@ -848,6 +904,7 @@ def source_AWS(
         family (Optional[str], optional): Colormap enhancement family ('default' or 'noaa'). Defaults to None.
         borders (bool, optional): If True, draws administrative borders / croquis. Defaults to True.
         max_dim (Optional[int], optional): Max pixel dimension or 0 for uncompressed native. Defaults to None.
+        satellite (Optional[str], optional): Explicit satellite identifier (G16, G19, auto). Defaults to None.
     """
     utc = time.gmtime()
     tenMinutesAgo = time.time() - ( 60 * 10 )
@@ -889,10 +946,11 @@ def source_AWS(
             dates, hours, minutes,
             on_file_ready=lambda f: processImage(
                 f, label=label, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim
-            )
+            ),
+            satellite=satellite
         )
     else:
-        flist = download(dates, hours, minutes)
+        flist = download(dates, hours, minutes, satellite=satellite)
         if flist:
             for aFile in flist:
                 processImage(aFile, label=label, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim)
@@ -913,7 +971,8 @@ def manual_date(
     overwrite: bool = False,
     family: Optional[str] = None,
     borders: bool = True,
-    max_dim: Optional[int] = None
+    max_dim: Optional[int] = None,
+    satellite: Optional[str] = None
 ) -> None:
     """
     Orchestrates manual, targeted satellite imagery generation for specific timestamps and coordinates.
@@ -932,6 +991,7 @@ def manual_date(
         family (Optional[str], optional): Colormap enhancement family ('default' or 'noaa'). Defaults to None.
         borders (bool, optional): If True, draws administrative borders / croquis. Defaults to True.
         max_dim (Optional[int], optional): Max pixel dimension or 0 for uncompressed native. Defaults to None.
+        satellite (Optional[str], optional): Explicit satellite identifier (G16, G19, auto). Defaults to None.
     """
     prepare_folders(dates)
 
@@ -943,10 +1003,11 @@ def manual_date(
             dates, hours, minutes,
             on_file_ready=lambda f: processImage(
                 f, lat=lat, lon=lon, label=label, bullseye=bullseye, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim
-            )
+            ),
+            satellite=satellite
         )
     else:
-        flist = download(dates, hours, minutes)
+        flist = download(dates, hours, minutes, satellite=satellite)
         if flist:
             for aFile in flist:
                 processImage(
@@ -1209,7 +1270,18 @@ def processImage(
     else:
         Unit = "Brightness Temperature [°C]"
 
-    Title = dsatellite.upper().replace("GOES", "GOES-") + " Band " + str(Band) + " " + Wavelenghts[int(Band)] + " " + Unit + " " + date + "  " + time
+    file_sat = dsatellite.upper().replace("GOES", "GOES-")
+    a_base = os.path.basename(aFile).upper()
+    if "_G16_" in a_base or "_G16." in a_base or "GOES16" in a_base:
+        file_sat = "GOES-16"
+    elif "_G19_" in a_base or "_G19." in a_base or "GOES19" in a_base:
+        file_sat = "GOES-19"
+    elif "_G18_" in a_base or "GOES18" in a_base:
+        file_sat = "GOES-18"
+    elif "_G17_" in a_base or "GOES17" in a_base:
+        file_sat = "GOES-17"
+
+    Title = file_sat + " Band " + str(Band) + " " + Wavelenghts[int(Band)] + " " + Unit + " " + date + "  " + time
     Institution = watermark if watermark is not None else institucion
 
     if os.path.exists(aFile):
@@ -1757,6 +1829,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help='Max pixel dimension for output image (e.g. 1024, 2048, 4096, or 0 for native resolution). Defaults to config value.'
     )
+    parser.add_argument(
+        '--satellite', '--sat',
+        dest='satellite',
+        type=str,
+        default=None,
+        help='Target GOES satellite (G16, G19, or auto). Defaults to auto (G16 before April 7, 2025, G19 after).'
+    )
     return parser
 
 def main(argv: Optional[List[str]] = None) -> None:
@@ -1860,7 +1939,8 @@ def main(argv: Optional[List[str]] = None) -> None:
                 overwrite=args.overwrite,
                 family=args.family,
                 borders=args.borders,
-                max_dim=args.max_dim
+                max_dim=args.max_dim,
+                satellite=args.satellite
             )
 
     elif args.mode == "auto":
@@ -1871,7 +1951,8 @@ def main(argv: Optional[List[str]] = None) -> None:
             overwrite=args.overwrite,
             family=args.family,
             borders=args.borders,
-            max_dim=args.max_dim
+            max_dim=args.max_dim,
+            satellite=args.satellite
         )
 
     else:

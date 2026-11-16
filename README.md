@@ -133,14 +133,35 @@ flowchart LR
 
 Run the containerized environment with all system dependencies (GDAL, PROJ, GEOS) pre-configured:
 
-```bash
-docker compose up -d
-docker compose exec app bash
-```
+1. **Start the Docker stack in the background**:
+   ```bash
+   docker compose up -d
+   ```
+
+2. **Execute commands directly from your host terminal**:
+   ```bash
+   # Manual mode for specific observation date & time:
+   docker compose exec app python main.py --mode="manual" --source="aws" --date=20240929 --hours=11 --minutes=00
+
+   # Automated near-real-time stream:
+   docker compose exec app python main.py --mode="auto" --source="aws" --label=true
+   ```
+
+3. **Or open an interactive Bash shell inside the container**:
+   ```bash
+   docker compose exec app bash
+   # Inside the /app working directory:
+   python main.py --mode="auto" --source="aws" --label=true
+   ```
 
 ---
 
 ## 🚀 Usage Guide
+
+> [!TIP]
+> **Running with Docker vs. Conda**:
+> - **With Conda (Local Environment)**: Run `python app/main.py [flags...]` from the repository root.
+> - **With Docker (Containerized)**: Run `docker compose exec app python main.py [flags...]` directly from your host shell.
 
 The tool supports two execution modes: **Manual** (historical events and targeted coordinates) and **Automated** (near-real-time streaming).
 
@@ -220,6 +241,7 @@ python app/main.py --mode="auto" --source="aws" --label=true
 | `--c16-enhanced` | `--c16-color` | `bool` | `False` | Display Band 16 (CO2) with convective BD color enhancement instead of thermal grayscale (`true`/`false`). |
 | `--borders` | `--croquis` | `bool` | `True` | Draw administrative vector boundaries (departments and countries / croquis) (`true`/`false`). |
 | `--max-dim` | `--resolution-px` | `int` | `2048` | Maximum output raster dimension in pixels (e.g. `2048`, `4096`, or `0` for uncompressed native resolution). |
+| `--satellite` | `--sat` | `str` | `auto` | Target GOES satellite (`G16`, `G19`, or `auto`). Defaults to `auto`: automatically selects GOES-16 for observations before April 7, 2025 and GOES-19 for subsequent observations. |
 
 ---
 
