@@ -66,3 +66,14 @@ python app/main.py \
 - **Formato de Rangos**: `main.py` no acepta notación de rangos como `00-06`. Todos los rangos solicitados por el usuario deben ser expandidos obligatoriamente (ej. `00,01,02,03,04,05,06`).
 - **Contexto de Ejecución**: Siempre verifica que te encuentras en el entorno de Python correcto (Conda `goes-toolkit` o Docker vía `docker compose exec app python main.py`) que tenga instaladas las dependencias del proyecto (`goes`, `matplotlib`, `gdal`, `basemap`, etc.) antes de ejecutar los comandos.
 - **Resolución Automática de Satélite**: El sistema ahora resuelve el satélite **automáticamente** según la fecha: fechas **anteriores al 7 de abril de 2025** descargan automáticamente de **GOES-16** (`noaa-goes16`), y fechas **posteriores** de **GOES-19** (`noaa-goes19`). Ya no es necesario modificar manualmente `app/config.yaml`, a menos que el usuario pida forzar un satélite específico mediante el parámetro `--satellite="G16"` o `--satellite="G19"`.
+
+## 5. Arquitectura de Microservicios (API REST y Web GIS)
+El repositorio cuenta con 3 componentes desacoplados que pueden ejecutarse de forma independiente o conjunta:
+- **`app` (Pipeline)**: Generador de imágenes satelitales (CLI / cron). No expone puertos.
+- **`api` (Backend REST)**: Servicio FastAPI que expone metadatos espaciales, catálogo de fechas, secuencias de animación en 60 FPS y streaming de imágenes con ETag en el puerto `8000` (`/docs` para Swagger UI).
+  - Ejecución: `docker compose up -d api` o `python -m uvicorn api.main:app --port 8000`
+  - Tests unitarios: `python -m pytest api/tests/`
+- **`web` (Visor Web GIS)**: Frontend Nginx + React + Leaflet que consume el API en el puerto `3000` (`http://localhost:3000`).
+  - Ejecución: `docker compose up -d web` o `cd web && npm run dev`
+  - Build de producción: `cd web && npm run build` (genera en `web/dist/`)
+

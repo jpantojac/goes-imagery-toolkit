@@ -103,12 +103,50 @@ Custom user families can be added by placing `ch01.cpt` through `ch16.cpt` insid
 ## 🏗️ Architecture & Processing Pipeline
 
 ```mermaid
-flowchart LR
-    A["Raw Data Ingestion<br/>(AWS S3 NOAA / IDEAM)"] --> B["NetCDF4 Decoding<br/>(ABI-L1b-RadF)"]
-    B --> C["Radiometric Calibration<br/>(Planck Inversion / Esun)"]
-    C --> D["Spatial Reprojection<br/>(Geostationary -> WGS84 EPSG:4326)"]
-    D --> E["Cartographic Composition<br/>(CPT Colormaps, Shapefiles, Waypoints)"]
-    E --> F["GIS & Visual Outputs<br/>(.png, .pgw, .tif)"]
+flowchart TD
+    subgraph Storage ["💾 Shared Storage (Volume / NAS)"]
+        OUT["app/output/ (Julian Day / CXX / *.png, *.pgw, *.tif)"]
+        LAT["app/latest/ (latestCXX.png, latestCXX.pgw)"]
+        CFG["app/config.yaml"]
+    end
+
+    subgraph Service1 ["⚙️ Component 1: Pipeline Engine (CLI / Batch / Cron)"]
+        P_WORKER["goes-toolkit (app)"]
+        P_DOWNLOAD["Downloader (AWS S3 / IDEAM)"]
+        P_PROCESS["Processor (Calibration, CPT, GeoTIFF)"]
+        P_WORKER --> P_DOWNLOAD --> P_PROCESS --> OUT
+        P_PROCESS --> LAT
+    end
+
+    subgraph Service2 ["🚀 Component 2: Backend REST API (FastAPI)"]
+        API["goes-api (:8000)"]
+        CACHE["E-Tag & Cache-Control (Immutable Frames)"]
+        SWAGGER["OpenAPI / Swagger (/docs)"]
+        OUT -.->|Read-Only| API
+        LAT -.->|Read-Only| API
+        CFG -.->|Read-Only| API
+        API --> SWAGGER
+        API --> CACHE
+    end
+
+    subgraph Service3 ["🌐 Component 3: Satellite Web GIS (React + Leaflet)"]
+        WEB["goes-web (:3000)"]
+        ANIM["Animation Engine (Preloaded Buffer Loop @ 60 FPS)"]
+        MAP["Leaflet Map (WGS84 EPSG:4326)"]
+        CONTROLS["Layer Switcher & Opacity Slider"]
+        TIMELINE["Interactive UTC Scrubber"]
+        WEB --> MAP
+        WEB --> ANIM
+        WEB --> CONTROLS
+        WEB --> TIMELINE
+    end
+
+    subgraph Clients ["🌍 External Consumers"]
+        CLIENT_EXT["Mobile Apps / External GIS / QGIS / Research Portals"]
+    end
+
+    API -->|JSON Metadata & Cached PNG Stream| WEB
+    API -->|REST API & GeoTIFFs| CLIENT_EXT
 ```
 
 ---
@@ -264,6 +302,68 @@ Tune worker concurrency to your machine's hardware and network capacity:
 performance:
   max_download_workers: 4       # Concurrent download worker threads (recommended: 4 to 8)
   enable_pipeline_overlap: true  # Concurrently trigger image processing as downloads complete
+```
+
+---
+
+## 🌐 Web GIS Interactive Viewer & REST API
+
+The toolkit includes an enterprise-grade, microservices-based web visualization stack and RESTful API that can run independently or alongside the image generation pipeline:
+
+### 1. High-Performance Web GIS (`goes-web`)
+* **60 FPS Fluid Temporal Animations**: Utilizes double-buffering preloaded Leaflet overlays, eliminating raster reload flicker and browser memory spikes.
+* **Spectral Band Selector**: Intuitive grouped switching across Visible (C01–C02), Near-IR (C03–C06), Water Vapor (C08–C10), and Longwave Thermal IR (C07, C11–C16).
+* **Transparency & Opacity Control**: Real-time 0% to 100% opacity slider to blend satellite imagery with underlying terrain or base cartography.
+* **Calibrated Meteorological Colorbar**: Dynamically displays the active channel's temperature (°C) or reflectance (%) scale and physical limits.
+* **Interactive UTC Timeline Scrubber**: Drag-and-drop timeline, variable playback speed (1 to 20 FPS), frame step buttons, and frame count selector (6, 12, 24, 48).
+* **Basemap Switcher**: High-contrast CartoDB Dark Matter, ESRI World Imagery (Satellite), and OpenStreetMap.
+* **Direct Product Download**: Instant one-click download of the current visual PNG or 16-bit GeoTIFF for GIS analysis (QGIS/ArcGIS).
+
+### 2. Backend REST API (`goes-api`)
+Built on **FastAPI** with automatic interactive OpenAPI / Swagger documentation (`http://localhost:8000/docs`):
+
+| Endpoint | Method | Description |
+|:---|:---:|:---|
+| `/api/v1/health` | `GET` | Health check, storage mounts, and disk space diagnostics. |
+| `/api/v1/metadata/bounds` | `GET` | Geographical bounding box (`EPSG:4326`), Leaflet bounds, and default map center. |
+| `/api/v1/channels` | `GET` | Complete metadata registry for all 16 ABI channels (wavelength, resolution, meteorological application). |
+| `/api/v1/legends/{channel}` | `GET` | Calibrated colorbar stops, CSS linear gradient, and physical units (°C or %). |
+| `/api/v1/catalog` | `GET` | Temporal inventory of processed Julian days, channels, and frame counts. |
+| `/api/v1/latest` | `GET` | Quick metadata and URLs for the most recent observation across all channels. |
+| `/api/v1/frames` | `GET` | Chronological frame sequences for animation (`channel`, `limit`, `date`). |
+| `/api/v1/images/{day}/{ch}/{file}` | `GET` | Stream satellite PNGs/GeoTIFFs with aggressive `ETag` and `Cache-Control` headers. |
+
+### 3. Running the Stack with Docker Compose
+
+Run all three decoupled services or any subset:
+
+```bash
+# Start the full stack (Pipeline + Backend API + Web GIS):
+docker compose up -d
+
+# Start only the Backend REST API (for external applications / mobile / QGIS):
+docker compose up -d api
+
+# Start only the Web GIS and API:
+docker compose up -d api web
+
+# Access points:
+# Web GIS Interface:  http://localhost:3000
+# OpenAPI / Swagger:  http://localhost:8000/docs
+# Pipeline Generator: docker compose exec app python main.py [flags...]
+```
+
+### 4. Running Locally (Without Docker)
+
+```bash
+# Start Backend API:
+python -m uvicorn api.main:app --reload --port 8000
+
+# Start Frontend (in a separate terminal):
+cd web
+npm install
+npm run dev
+# Opens at http://localhost:5173
 ```
 
 ---

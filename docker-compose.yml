@@ -1,4 +1,8 @@
 services:
+  # ==============================================================
+  # Component 1: Satellite Image Processing Pipeline (Engine)
+  # Can run autonomously in batch / cron / CLI mode without web
+  # ==============================================================
   app:
     build:
       context: .
@@ -10,3 +14,45 @@ services:
       - ./tests:/app/tests:ro
     working_dir: /app
     command: tail -f /dev/null
+    restart: unless-stopped
+
+  # ==============================================================
+  # Component 2: High-Performance Backend REST API (FastAPI)
+  # Exposes OpenAPI/Swagger, spatial metadata, and image streaming
+  # ==============================================================
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    image: goes-imagery-api:latest
+    container_name: goes-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app/output:/data/output:ro
+      - ./app/latest:/data/latest:ro
+      - ./app/config.yaml:/data/config.yaml:ro
+      - ./app/colors:/data/colors:ro
+    environment:
+      - OUTPUT_DIR=/data/output
+      - LATEST_DIR=/data/latest
+      - CONFIG_FILE=/data/config.yaml
+      - COLORS_DIR=/data/colors
+      - CORS_ORIGINS=*
+    restart: unless-stopped
+
+  # ==============================================================
+  # Component 3: Satellite Web GIS Viewer (Nginx + React + Leaflet)
+  # 60 FPS fluid temporal animation, opacity sliders, and legends
+  # ==============================================================
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    image: goes-imagery-web:latest
+    container_name: goes-web
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+    restart: unless-stopped

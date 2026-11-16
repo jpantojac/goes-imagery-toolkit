@@ -48,3 +48,14 @@ ENV/
 *~
 .DS_Store
 Thumbs.db
+
+# ==========================================
+# Web & Frontend Build Artifacts
+# ==========================================
+node_modules/
+web/node_modules/
+dist/
+web/dist/
+.vite/
+web/.vite/
+
