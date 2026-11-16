@@ -3,19 +3,33 @@
 general:
   institution: "Open Satellite Project"
   generate_tiff: true
+  overwrite: false
   registry_file: "ultima_descarga.txt"
 
 satellite:
   channels:
     - "01"
+    - "02"
+    - "03"
+    - "04"
+    - "05"
+    - "06"
+    - "07"
+    - "08"
     - "09"
+    - "10"
+    - "11"
+    - "12"
     - "13"
+    - "14"
+    - "15"
+    - "16"
   channels_ideam:
     - "C01"
     - "C09"
     - "C13"
   base_url: "https://bart.ideam.gov.co/ospa/sensores/pasivos/satelite/GOES19/RAW/"
-  satellite: "G19"
+  satellite: "auto"  # "auto" (G16 before April 2025, G19 after), or explicit "G16" / "G19"
 
 paths:
   base: ""  # Leave empty to dynamically resolve project root
@@ -32,6 +46,8 @@ shapes:
   countries_layer: "countries"
 
 colors:
+  family: "default"            # Options: "default" (Oklahoma C13 + Regional), "noaa" (Official NOAA/NHC)
+  c16_color_enhanced: false    # If true, applies convective BD color curve to Band 16 instead of thermal grayscale
   visible: "grey255.cpt"
   infrared: "thermal.cpt"
   water_vapor: "WV.cpt"
@@ -39,6 +55,10 @@ colors:
 plotting:
   resolution_zoomed: 0.2
   resolution_full: 1.5
+  max_dimension: 2048       # Max image dimension in pixels (1024, 2048, 4096, or 0 for uncompressed native)
+  show_borders: true        # Master switch for vector borders / croquis (true/false)
+  show_departments: true    # Department / state boundaries
+  show_countries: true      # International country boundaries
   dpi_default: 100
   max_pixels: 65536
   radius_nautical_miles: 200
@@ -55,3 +75,7 @@ plotting:
     - -14  #S
     - -50  #E
     - 30   #N
+
+performance:
+  max_download_workers: 6       # Concurrent download worker threads (recommended: 4 to 8)
+  enable_pipeline_overlap: true  # Concurrently trigger image processing as downloads complete
