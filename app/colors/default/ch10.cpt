@@ -1,0 +1,32 @@
+# Water Vapor Palette for Brightness Temperature (°C)
+# Range: -80°C to 5°C
+
+# === Rango caliente (rojos/naranjas) ===
+  0     52    15     15     # Rojo intenso (Very Dark Red)
+ -7     154    1     0     # Marrón oscuro rojizo (Dark Reddish Brown)
+ -9     228  115     1     # Naranja claro (Light Orange)
+-14      52   15    15     # Rojo muy oscuro (Very Dark Red)
+-15      50   50    50     # Gris carbón (Charcoal Gray)
+-20     105  105   105     # Gris medio (Medium Gray)
+
+# === Transición hacia blanco (grises intermedios) ===
+-25     140  140   140     # Gris claro (Light Gray)
+-30     170  170   170     # Gris plateado (Silver Gray)
+-33     200  200   200     # Gris brillante (Bright Gray)
+-34     255  255   255     # Blanco puro (Pure White)
+-35     255  255   255     # Blanco puro (Pure White)
+
+# === Rango frío (azules, verdes y tonos cian) ===
+-37      91  141   192     # Azul celeste (Sky Blue)
+-40       0  128   255     # Azul real (Royal Blue)
+-42       0    0    91     # Azul profundo (Deep Navy Blue)
+-45       0    5   242     # Azul eléctrico (Electric Blue)
+-53       0  117     1     # Verde bosque (Forest Green)
+-58       0  252     0     # Verde brillante (Lime Green)
+-60      97   22     0     # Marrón cobrizo (Copper Brown)
+-63     225    1     1     # Rojo fuerte (Strong Red)
+-65     128    0     0     # Rojo oscuro (Dark Red)
+
+# === Extremo inferior (-80°C) ===
+-68     255  170   1       # Dorado suave (Soft Gold)
+-80     255  255 255       # Blanco puro (Pure White)

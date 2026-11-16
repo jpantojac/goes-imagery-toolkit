@@ -107,7 +107,7 @@ def remap(path, extent, resolution, x1, y1, x2, y2):
         
     start = t.time()
     
-    gdal.ReprojectImage(raw, grid, sourcePrj.ExportToWkt(), targetPrj.ExportToWkt(), gdal.GRA_NearestNeighbour, options=['NUM_THREADS=ALL_CPUS']) 
+    gdal.ReprojectImage(raw, grid, sourcePrj.ExportToWkt(), targetPrj.ExportToWkt(), gdal.GRA_Bilinear, options=['NUM_THREADS=ALL_CPUS']) 
     
     logging.info ('Finished remapping! Time: %f %s ', t.time() - start, 'seconds')
     

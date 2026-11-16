@@ -112,12 +112,17 @@ import time
 try:
     import requests
     from bs4 import BeautifulSoup
+    from urllib3.util.retry import Retry
+    from requests.adapters import HTTPAdapter
 except (ImportError, ModuleNotFoundError):
     requests = None
     BeautifulSoup = None
+    Retry = None
+    HTTPAdapter = None
 
 import urllib3
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Callable, Tuple, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     from PIL import Image
@@ -205,15 +210,54 @@ sat_section         = config.get('satellite', config.get('satelite', {}))
 channels            = sat_section.get('channels', ["01", "09", "13"])
 channelsIdeam       = sat_section.get('channels_ideam', ["C01", "C09", "C13"])
 base_url            = sat_section.get('base_url', "https://bart.ideam.gov.co/ospa/sensores/pasivos/satelite/GOES19/RAW/")
-satellite           = sat_section.get('satellite', "G19")
+satellite           = sat_section.get('satellite', "auto")
+
+def resolve_satellite(date_str: str, override_sat: Optional[str] = None) -> Tuple[str, str]:
+    """
+    Resolves the operational GOES satellite identifier ('G16' or 'G19') and AWS bucket name
+    ('goes16' or 'goes19') based on the target observation date or an explicit CLI/config override.
+
+    Operational Transition Timeline:
+        - Prior to April 7, 2025: GOES-East is GOES-16 ('G16' / 'noaa-goes16').
+        - From April 7, 2025 onwards: GOES-East is GOES-19 ('G19' / 'noaa-goes19').
+
+    Args:
+        date_str (str): Target observation date in 'YYYYMMDD' format.
+        override_sat (Optional[str], optional): Explicit satellite code ('G16', 'G19', 'auto', etc.). Defaults to None.
+
+    Returns:
+        Tuple[str, str]: (satellite_code, goes_download_name), e.g. ('G16', 'goes16') or ('G19', 'goes19').
+    """
+    sat_cand = override_sat if override_sat is not None else _cfg_get('satellite', 'satellite', default='auto')
+    sat_str = str(sat_cand).strip()
+
+    if sat_str.lower() != 'auto':
+        sat_upper = sat_str.upper()
+        if sat_upper.startswith('G'):
+            dsat = 'goes' + sat_upper[1:]
+            return sat_upper, dsat.lower()
+        if sat_str.lower().startswith('goes'):
+            code = 'G' + sat_str.lower().replace('goes', '')
+            return code, sat_str.lower()
+        return sat_upper, sat_str.lower()
+
+    # Automatic temporal resolution based on GOES-East operational transition (April 7, 2025)
+    try:
+        dt = datetime.strptime(date_str, "%Y%m%d")
+        if dt < datetime(2025, 4, 7):
+            return "G16", "goes16"
+        else:
+            return "G19", "goes19"
+    except Exception:
+        return "G19", "goes19"
 
 # Globales
-dsatellite = satellite.replace('G','goes')
+dsatellite = satellite.replace('G','goes') if satellite != 'auto' else 'goes19'
 ncFile = None
 fechas_julianas = []
 
 
-def R2BT(radiance: np.ndarray, channel: str) -> np.ndarray:
+def R2BT(radiance: np.ndarray, channel: str, coeffs: Optional[dict] = None) -> np.ndarray:
     """
     Inverts the Planck radiation function to convert spectral radiance into
     calibrated Brightness Temperature (T_B in Celsius) for thermal infrared bands.
@@ -231,6 +275,7 @@ def R2BT(radiance: np.ndarray, channel: str) -> np.ndarray:
         radiance (np.ndarray): Spectral radiance array measured by the ABI sensor
             in mW / (m^2 * sr * cm^-1).
         channel (str): ABI spectral channel identifier (e.g. 'C07', 'C13').
+        coeffs (Optional[dict], optional): Sensor Planck coefficients dictionary.
 
     Returns:
         np.ndarray: Calibrated Brightness Temperature array in degrees Celsius (°C).
@@ -239,25 +284,27 @@ def R2BT(radiance: np.ndarray, channel: str) -> np.ndarray:
         KeyError: If the specified channel is not a supported thermal infrared band.
     """
     BT_COEFFS = {
-    'C07': {'fk1': 607.76,   'fk2': 121.27,  'bc1': 0.50251, 'bc2': 1.00121},
-    'C08': {'fk1': 1349.07,  'fk2': 215.47,  'bc1': 0.44789, 'bc2': 0.99947},
-    'C09': {'fk1': 3334.57,  'fk2': 479.29,  'bc1': 0.37735, 'bc2': 0.99905},
-    'C10': {'fk1': 5191.21,  'fk2': 774.89,  'bc1': 0.28547, 'bc2': 0.99959},
-    'C11': {'fk1': 11896.29, 'fk2': 1788.17, 'bc1': 0.12072, 'bc2': 0.99978},
-    'C12': {'fk1': 8052.82,  'fk2': 1228.61, 'bc1': 0.13377, 'bc2': 0.99979},
-    'C13': {'fk1': 10736.40, 'fk2': 1389.86, 'bc1': 0.13445, 'bc2': 0.99955},
-    'C14': {'fk1': 7776.19,  'fk2': 1111.95, 'bc1': 0.13637, 'bc2': 0.99975},
-    'C15': {'fk1': 6806.27,  'fk2': 992.03,  'bc1': 0.14449, 'bc2': 0.99982},
-    'C16': {'fk1': 5364.31,  'fk2': 829.59,  'bc1': 0.11557, 'bc2': 0.99985},
+        'C07': {'fk1': 200248.0,  'fk2': 3685.87,  'bc1': 0.48985, 'bc2': 0.99931},
+        'C08': {'fk1': 50451.5,   'fk2': 2327.96,  'bc1': 1.71389, 'bc2': 0.99631},
+        'C09': {'fk1': 35620.4,   'fk2': 2072.92,  'bc1': 0.29884, 'bc2': 0.99929},
+        'C10': {'fk1': 30210.0,   'fk2': 1962.16,  'bc1': 0.05458, 'bc2': 0.99986},
+        'C11': {'fk1': 19441.3,   'fk2': 1694.05,  'bc1': 0.13691, 'bc2': 0.99962},
+        'C12': {'fk1': 13519.8,   'fk2': 1500.86,  'bc1': 0.09101, 'bc2': 0.99971},
+        'C13': {'fk1': 10860.4,   'fk2': 1395.19,  'bc1': 0.07481, 'bc2': 0.99975},
+        'C14': {'fk1': 8500.63,   'fk2': 1285.78,  'bc1': 0.21051, 'bc2': 0.99925},
+        'C15': {'fk1': 6489.46,   'fk2': 1175.13,  'bc1': 0.22448, 'bc2': 0.99913},
+        'C16': {'fk1': 5084.62,   'fk2': 1083.35,  'bc1': 0.06004, 'bc2': 0.99975},
     }
 
-    coeffs = BT_COEFFS[channel]
+    if coeffs is None:
+        coeffs = BT_COEFFS[channel]
     fk1 = coeffs['fk1']
     fk2 = coeffs['fk2']
     bc1 = coeffs['bc1']
     bc2 = coeffs['bc2']
-    
-    T = (fk2 / (np.log((fk1 / radiance) + 1)) - bc1) / bc2
+
+    rad_valid = np.maximum(radiance, 1e-4) if np is not None else radiance
+    T = (fk2 / (np.log((fk1 / rad_valid) + 1)) - bc1) / bc2
     TC = T - 273.15
     return TC
 
@@ -296,7 +343,12 @@ def R2BT_WV_visual(rad: np.ndarray, channel: str) -> np.ndarray:
     tb = tmin + (rad_clipped - rmin) * (tmax - tmin) / (rmax - rmin)
     return tb
 
-def R2RT(radiance: np.ndarray, channel: str) -> np.ndarray:
+def R2RT(
+    radiance: np.ndarray,
+    channel: str,
+    d2: float = 1.0,
+    day_julian: Optional[int] = None
+) -> np.ndarray:
     """
     Converts solar spectral radiance into Top-of-Atmosphere (TOA) bidirectional
     reflectance factor (R) with non-linear display gamma enhancement.
@@ -313,6 +365,8 @@ def R2RT(radiance: np.ndarray, channel: str) -> np.ndarray:
         radiance (np.ndarray): Solar radiance measured by the ABI sensor in
             mW / (m^2 * sr * cm^-1).
         channel (str): Reflective channel identifier ('C01' through 'C06').
+        d2 (float, optional): Normalized Sun-Earth distance squared. Defaults to 1.0.
+        day_julian (Optional[int], optional): Day of year for exact astronomical distance.
 
     Returns:
         np.ndarray: Gamma-corrected reflectance array bounded in [0.0, 1.0].
@@ -329,12 +383,17 @@ def R2RT(radiance: np.ndarray, channel: str) -> np.ndarray:
         'C06': 76.0102     # Banda 6, 2.2 µm
     }
 
-    d2 = 0.3  # Distancia Sol-Tierra normalizada (ajuste simplificado)
-    if channel in Esun:
-        ref = (radiance * np.pi * d2) / Esun[channel]
-    else:
+    if channel not in Esun:
         raise ValueError(f"Constante Esun no definida para el canal {channel}")
-    
+
+    if day_julian is not None and np is not None:
+        # Exact astronomical Earth-Sun distance squared
+        d = 1.0 - 0.0167 * np.cos(2.0 * np.pi * (day_julian - 3) / 365.0)
+        dist_sq = float(d ** 2)
+    else:
+        dist_sq = d2
+
+    ref = (radiance * np.pi * dist_sq) / Esun[channel]
     ref = np.maximum(ref, 0.0)
     ref = np.minimum(ref, 1.0)
     ref_gamma = np.sqrt(ref)
@@ -379,71 +438,315 @@ def prepare_folders(dates: List[str]) -> None:
     """
     for fecha in dates:
         fecha_dt = datetime.strptime(fecha, "%Y%m%d")
-        fecha_juliana = fecha_dt.strftime("%j")  # %j es el formato para el día del año
-        fechas_julianas.append(fecha_juliana)
+        fecha_juliana = fecha_dt.strftime("%j")
+        if fecha_juliana not in fechas_julianas:
+            fechas_julianas.append(fecha_juliana)
 
     for fecha in fechas_julianas:
-        create_folder(os.path.join(basePath,config['paths']['input'],fecha),False)    
-        create_folder(os.path.join(basePath,config['paths']['output'],fecha),False)    
+        create_folder(os.path.join(basePath, config['paths']['input'], fecha), False)
+        create_folder(os.path.join(basePath, config['paths']['output'], fecha), False)
 
-def download(dates: List[str], hours: List[str], minutes: List[str]) -> List[str]:
+def _progress_download_file(
+    URL: str,
+    name_file: str,
+    path_out: str,
+    retries: int = 10,
+    backoff: float = 0.2,
+    size_format: str = 'Decimal',
+    show_download_progress: bool = True,
+    overwrite_file: bool = False
+) -> None:
     """
-    Retrieves NOAA GOES Level 1b Radiance (ABI-L1b-RadF) NetCDF files from AWS S3.
+    Downloads a remote NetCDF file from NOAA S3, logging thread-safe percentage
+    and a visual progress bar milestones for concurrent worker threads.
 
-    Queries hourly cloud storage prefixes with minute-level precision, enforcing
-    temporal bounds to prevent S3 prefix overshoot. Automatically falls back
-    to pre-existing local files if already downloaded in previous sessions.
+    Args:
+        URL (str): Remote S3 HTTP/HTTPS URL.
+        name_file (str): Output filename.
+        path_out (str): Destination folder path.
+        retries (int, optional): Connection retries. Defaults to 10.
+        backoff (float, optional): Exponential backoff factor. Defaults to 0.2.
+        size_format (str, optional): 'Decimal' (MB = 1e6 B) or 'Binary'. Defaults to 'Decimal'.
+        show_download_progress (bool, optional): Kept for signature compatibility with GOES.download.
+        overwrite_file (bool, optional): If True, redownloads existing files. Defaults to False.
+    """
+    if requests is None:
+        raise RuntimeError("The 'requests' package is required for downloading satellite files.")
+
+    ch_label = "CH"
+    for tag in ("-M6C", "-M3C", "-M4C", "-C", "_M6C", "_M3C", "_M4C", "_C"):
+        if tag in name_file:
+            ch_label = "C" + name_file.split(tag)[1][:2]
+            break
+
+    session = requests.Session()
+    if Retry is not None and HTTPAdapter is not None:
+        retries_config = Retry(total=retries, backoff_factor=backoff, status_forcelist=[500, 502, 503, 504])
+        session.mount('http://', HTTPAdapter(max_retries=retries_config))
+        session.mount('https://', HTTPAdapter(max_retries=retries_config))
+
+    full_target_path = os.path.join(path_out, name_file)
+    req = session.get(URL, stream=True)
+    content_length = req.headers.get('content-length')
+    total_size = int(content_length) if content_length else 0
+    dsize = 1000 * 1000 if size_format == 'Decimal' else 1024 * 1024
+
+    if os.path.isfile(full_target_path) and not overwrite_file:
+        if total_size > 0 and os.path.getsize(full_target_path) == total_size:
+            logging.info(f"[{ch_label}] File already exists locally: {name_file}")
+            return
+
+    os.makedirs(path_out, exist_ok=True)
+    downloaded = 0
+    last_milestone = -1
+    bar_width = 15
+
+    total_mb_str = f"{total_size / dsize:.1f} MB" if total_size > 0 else "unknown size"
+    logging.info(f"[{ch_label}] Ingesting {name_file} ({total_mb_str})...")
+
+    with open(full_target_path, 'wb') as output_file:
+        for chunk in req.iter_content(chunk_size=128 * 1024):
+            if chunk:
+                output_file.write(chunk)
+                downloaded += len(chunk)
+                if total_size > 0:
+                    pct = (downloaded / total_size) * 100.0
+                    milestone = int(pct // 20) * 20
+                    if milestone > last_milestone and milestone in (20, 40, 60, 80, 100):
+                        filled = int(round(bar_width * downloaded / total_size))
+                        bar_str = '=' * filled + (' ' * (bar_width - filled))
+                        logging.info(
+                            f"[{ch_label}] [{bar_str}] {pct:5.1f}% "
+                            f"({downloaded / dsize:.1f}/{total_size / dsize:.1f} MB)"
+                        )
+                        last_milestone = milestone
+
+    if total_size == 0 or last_milestone < 100:
+        bar_str = '=' * bar_width
+        logging.info(f"[{ch_label}] [{bar_str}] 100.0% ({downloaded / dsize:.1f} MB) - Download complete")
+
+# Install progress tracking hook into GOES package if present
+if GOES is not None:
+    try:
+        import GOES.downloads.download_data as _goes_dd
+        _goes_dd.download_file = _progress_download_file
+    except Exception as _hook_err:
+        logging.debug(f"Could not hook GOES download_file: {_hook_err}")
+
+def _download_channel_slot(
+    ch: Union[str, int],
+    date: str,
+    hour: str,
+    minute: str,
+    dsat: str,
+    output_dir: str
+) -> List[str]:
+    """
+    Downloads or resolves a single GOES ABI spectral channel file for a specific observation slot.
+
+    First verifies if a locally matching file already exists in output_dir (cache hit).
+    If absent, queries NOAA AWS S3 via GOES.download with strict temporal boundaries.
+
+    Args:
+        ch (Union[str, int]): Spectral channel identifier (e.g. '01', 1, '13').
+        date (str): Date in 'YYYYMMDD' format.
+        hour (str): UTC hour in 'HH' format.
+        minute (str): UTC minute in 'MM' format.
+        dsat (str): GOES satellite string (e.g. 'goes19').
+        output_dir (str): Destination directory for NetCDF files.
+
+    Returns:
+        List[str]: List of resolved local NetCDF file paths (empty list if download failed).
+    """
+    ch_str = f"{int(ch):02d}"
+    fecha_dt = datetime.strptime(date, "%Y%m%d")
+    fecha_hora = datetime.strptime(f"{date}-{hour}{minute}00", '%Y%m%d-%H%M%S')
+    nueva_fecha_hora = min(
+        fecha_hora + timedelta(minutes=5),
+        fecha_hora.replace(minute=55, second=0)
+    )
+    dateend = nueva_fecha_hora.strftime('%Y%m%d-%H%M00')
+    prefix_match = f"s{fecha_dt.strftime('%Y%j')}{hour}{minute}"
+    ch_tag = f"C{ch_str}"
+
+    # 1. Local cache hit check (avoids redundant S3 queries)
+    if os.path.exists(output_dir):
+        existing = [
+            os.path.join(output_dir, f) for f in os.listdir(output_dir)
+            if f.endswith('.nc') and prefix_match in f and ch_tag in f
+        ]
+        if existing:
+            logging.info(
+                f"[Cache Hit] Channel {ch_str} already exists locally: {os.path.basename(existing[0])}"
+            )
+            return existing
+
+    # 2. Query and download from NOAA S3 via GOES
+    flist = []
+    if GOES is not None:
+        try:
+            flist = GOES.download(
+                dsat,
+                'ABI-L1b-RadF',
+                DateTimeIni=f"{date}-{hour}{minute}00",
+                DateTimeFin=dateend,
+                channel=[ch_str],
+                path_out=output_dir,
+                show_download_progress=False
+            )
+        except FileNotFoundError as fnf_err:
+            logging.warning(f"S3 remote directory not found for channel {ch_str} ({date} {hour}:{minute} UTC): {fnf_err}")
+        except Exception as dl_err:
+            logging.warning(f"Error querying GOES data for channel {ch_str} ({date} {hour}:{minute} UTC): {dl_err}")
+
+    if flist:
+        return flist
+
+    # 3. Fallback disk check in case file was saved without returning path
+    if os.path.exists(output_dir):
+        existing = [
+            os.path.join(output_dir, f) for f in os.listdir(output_dir)
+            if f.endswith('.nc') and prefix_match in f and ch_tag in f
+        ]
+        if existing:
+            return existing
+
+    return []
+
+def _build_download_tasks(
+    dates: List[str],
+    hours: List[str],
+    minutes: List[str],
+    satellite_override: Optional[str] = None
+) -> List[tuple]:
+    """
+    Constructs the sequence of download task specifications for each channel and timestamp,
+    dynamically resolving the operational satellite (G16 vs G19) for each target date.
+
+    Args:
+        dates (List[str]): List of observation dates in 'YYYYMMDD' format.
+        hours (List[str]): List of UTC hours in 'HH' format.
+        minutes (List[str]): List of UTC minutes in 'MM' format.
+        satellite_override (Optional[str], optional): Explicit satellite identifier. Defaults to None.
+
+    Returns:
+        List[tuple]: List of task parameter tuples (ch, date, hour, minute, dsat, output_dir).
+    """
+    tasks = []
+    for date in dates:
+        sat_code, dsat = resolve_satellite(date, satellite_override)
+        fecha_dt = datetime.strptime(date, "%Y%m%d")
+        fecha_juliana = fecha_dt.strftime("%j")
+        output = os.path.join(basePath, config['paths']['input'], fecha_juliana).rstrip(os.sep) + os.sep
+        for hour in hours:
+            for minute in minutes:
+                for ch in channels:
+                    tasks.append((ch, date, hour, minute, dsat, output))
+    return tasks
+
+def download_and_pipeline(
+    dates: List[str],
+    hours: List[str],
+    minutes: List[str],
+    on_file_ready: Optional[Callable[[str], None]] = None,
+    satellite: Optional[str] = None
+) -> List[str]:
+    """
+    Concurrent multi-threaded downloader with asynchronous producer-consumer pipelining.
+
+    Retrieves requested GOES spectral channels in parallel using ThreadPoolExecutor.
+    If on_file_ready is provided and pipeline overlap is enabled in config.yaml, completed
+    files are immediately dispatched to on_file_ready (e.g. processImage) so network I/O
+    and CPU image rendering overlap seamlessly.
 
     Args:
         dates (List[str]): List of target observation dates in 'YYYYMMDD' format.
         hours (List[str]): List of UTC target hours in 'HH' format (00-23).
         minutes (List[str]): List of target minutes in 'MM' format (00-59).
+        on_file_ready (Optional[Callable[[str], None]], optional): Callback executed as soon
+            as an individual NetCDF file is ready on disk. Defaults to None.
+        satellite (Optional[str], optional): Explicit satellite override (G16, G19, auto). Defaults to None.
+
+    Returns:
+        List[str]: Complete list of all downloaded or resolved NetCDF file paths.
+    """
+    max_workers_cfg = _cfg_get('performance', 'max_download_workers', default=4)
+    try:
+        max_workers = int(max_workers_cfg) if max_workers_cfg else 4
+    except (ValueError, TypeError):
+        max_workers = 4
+
+    overlap_cfg = _cfg_get('performance', 'enable_pipeline_overlap', default=True)
+    enable_overlap = bool(overlap_cfg) if overlap_cfg is not None else True
+
+    tasks = _build_download_tasks(dates, hours, minutes, satellite_override=satellite)
+    if not tasks:
+        return []
+
+    fulllist = []
+    pool_workers = min(max_workers, len(tasks))
+    logging.info(
+        f"Starting download of {len(tasks)} file(s) across {len(channels)} channel(s) "
+        f"with {pool_workers} concurrent worker(s) (overlap={enable_overlap})."
+    )
+
+    futures_map = {}
+    with ThreadPoolExecutor(max_workers=pool_workers) as executor:
+        for ch, date, hour, minute, dsat, output_dir in tasks:
+            fut = executor.submit(_download_channel_slot, ch, date, hour, minute, dsat, output_dir)
+            futures_map[fut] = (ch, date, hour, minute)
+
+        for fut in as_completed(futures_map):
+            ch, date, hour, minute = futures_map[fut]
+            try:
+                files = fut.result()
+                if files:
+                    for aFile in files:
+                        fulllist.append(aFile)
+                        if enable_overlap and on_file_ready is not None:
+                            try:
+                                on_file_ready(aFile)
+                            except Exception as proc_err:
+                                logging.error(f"Error processing file {aFile} in pipeline: {proc_err}")
+            except Exception as err:
+                logging.error(f"Download task failed for Channel {ch} ({date} {hour}:{minute}): {err}")
+
+    return fulllist
+
+def download(
+    dates: List[str],
+    hours: List[str],
+    minutes: List[str],
+    satellite: Optional[str] = None
+) -> List[str]:
+    """
+    Retrieves NOAA GOES Level 1b Radiance (ABI-L1b-RadF) NetCDF files from AWS S3.
+
+    Wrapper over download_and_pipeline maintaining backward compatibility for legacy callers.
+
+    Args:
+        dates (List[str]): List of target observation dates in 'YYYYMMDD' format.
+        hours (List[str]): List of UTC target hours in 'HH' format (00-23).
+        minutes (List[str]): List of target minutes in 'MM' format (00-59).
+        satellite (Optional[str], optional): Explicit satellite identifier (G16, G19, auto). Defaults to None.
 
     Returns:
         List[str]: List of filesystem paths to the downloaded or resolved NetCDF files.
     """
-    fulllist = []
-    for date in dates:
-        for hour in hours:
-            for minute in minutes:
-                fecha_hora = datetime.strptime(date+"-"+hour+minute+'00', '%Y%m%d-%H%M%S')
-                # Stay strictly within the requested slot with 00 seconds so GOES.download
-                # does not overshoot by 1 hour due to second-precision comparisons.
-                nueva_fecha_hora = min(
-                    fecha_hora + timedelta(minutes=5),
-                    fecha_hora.replace(minute=55, second=0)
-                )
-                dateend = nueva_fecha_hora.strftime('%Y%m%d-%H%M00')
-                fecha_dt = datetime.strptime(date, "%Y%m%d")
-                fecha_juliana = fecha_dt.strftime("%j")
-                output = (os.path.join(basePath, config['paths']['input'], fecha_juliana).rstrip(os.sep)+ os.sep)
-                flist = []
-                try:
-                    flist = GOES.download(dsatellite, 'ABI-L1b-RadF',
-                                DateTimeIni = date+"-"+hour+minute+'00', 
-                                DateTimeFin = dateend, 
-                                channel = channels, 
-                                path_out=output)
-                except FileNotFoundError as fnf_err:
-                    logging.warning(f"S3 remote directory not found for {date} {hour}:{minute} UTC: {fnf_err}")
-                except Exception as dl_err:
-                    logging.warning(f"Error querying GOES data for {date} {hour}:{minute} UTC: {dl_err}")
+    if satellite is not None:
+        return download_and_pipeline(dates, hours, minutes, on_file_ready=None, satellite=satellite)
+    return download_and_pipeline(dates, hours, minutes, on_file_ready=None)                
 
-                if flist:
-                    fulllist += flist
-                elif os.path.exists(output):
-                    # Fallback: check if files were already downloaded in this slot
-                    prefix_match = f"s{fecha_dt.strftime('%Y%j')}{hour}{minute}"
-                    existing = [
-                        os.path.join(output, f) for f in os.listdir(output)
-                        if f.endswith('.nc') and prefix_match in f
-                    ]
-                    if existing:
-                        logging.info(f"Using {len(existing)} pre-downloaded files from {output} for {date} {hour}:{minute}")
-                        fulllist += existing
-    return fulllist                
-
-def auto_date(source: str, label: bool = False, watermark: Optional[str] = None) -> None:
+def auto_date(
+    source: str,
+    label: bool = False,
+    watermark: Optional[str] = None,
+    overwrite: bool = False,
+    family: Optional[str] = None,
+    borders: bool = True,
+    max_dim: Optional[int] = None,
+    satellite: Optional[str] = None
+) -> None:
     """
     Executes near-real-time automated observation retrieval and product generation.
 
@@ -451,12 +754,17 @@ def auto_date(source: str, label: bool = False, watermark: Optional[str] = None)
         source (str): Satellite data source identifier ('aws' or 'ideam').
         label (bool, optional): If True, renders title bar, colorbar, and metadata. Defaults to False.
         watermark (Optional[str], optional): Custom institution or attribution watermark. Defaults to None.
+        overwrite (bool, optional): If True, forces product re-generation. Defaults to False.
+        family (Optional[str], optional): Colormap enhancement family ('default' or 'noaa'). Defaults to None.
+        borders (bool, optional): If True, draws administrative borders / croquis. Defaults to True.
+        max_dim (Optional[int], optional): Max pixel dimension or 0 for uncompressed native. Defaults to None.
+        satellite (Optional[str], optional): Explicit satellite override (G16, G19, auto). Defaults to None.
     """
     logging.info("Automated generation mode started")
     if source == 'aws':
-        source_AWS(label, watermark=watermark)
+        source_AWS(label, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim, satellite=satellite)
     elif source == "ideam":
-        source_IDEAM(label, watermark=watermark)
+        source_IDEAM(label, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim)
     else:
         logging.error(f"Unknown data source: {source}. Supported: aws | ideam")
 
@@ -511,13 +819,24 @@ def read_latest_downloaded() -> dict:
             return resultado
     return {}
 
-def source_IDEAM(label: bool = False, watermark: Optional[str] = None) -> None:
+def source_IDEAM(
+    label: bool = False,
+    watermark: Optional[str] = None,
+    overwrite: bool = False,
+    family: Optional[str] = None,
+    borders: bool = True,
+    max_dim: Optional[int] = None
+) -> None:
     """
     Scrapes and retrieves the most recent Level 1b imagery from the IDEAM regional HTTP archive.
 
     Args:
         label (bool, optional): If True, renders metadata, colorbar, and title banner. Defaults to False.
         watermark (Optional[str], optional): Custom watermark or attribution string. Defaults to None.
+        overwrite (bool, optional): If True, forces product re-generation. Defaults to False.
+        family (Optional[str], optional): Colormap enhancement family ('default' or 'noaa'). Defaults to None.
+        borders (bool, optional): If True, draws administrative borders / croquis. Defaults to True.
+        max_dim (Optional[int], optional): Max pixel dimension or 0 for uncompressed native. Defaults to None.
     """
     # Obtener el contenido de la página
     response = requests.get(base_url, verify=False)
@@ -559,11 +878,19 @@ def source_IDEAM(label: bool = False, watermark: Optional[str] = None) -> None:
                 logging.info(f"La imagen más reciente para {canal} ({archivo_mas_reciente}) ya fue descargada.")
 
     for aFile in archivos_descargados:
-        processImage(aFile, label=label, watermark=watermark)
+        processImage(aFile, label=label, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim)
     
     write_latest_downloaded(ultima_descarga)
 
-def source_AWS(label: bool = False, watermark: Optional[str] = None) -> None:
+def source_AWS(
+    label: bool = False,
+    watermark: Optional[str] = None,
+    overwrite: bool = False,
+    family: Optional[str] = None,
+    borders: bool = True,
+    max_dim: Optional[int] = None,
+    satellite: Optional[str] = None
+) -> None:
     """
     Retrieves and processes the most recent GOES observation slot from NOAA's public AWS S3 bucket.
 
@@ -573,6 +900,11 @@ def source_AWS(label: bool = False, watermark: Optional[str] = None) -> None:
     Args:
         label (bool, optional): If True, renders metadata, colorbar, and title banner. Defaults to False.
         watermark (Optional[str], optional): Custom watermark or attribution string. Defaults to None.
+        overwrite (bool, optional): If True, forces product re-generation. Defaults to False.
+        family (Optional[str], optional): Colormap enhancement family ('default' or 'noaa'). Defaults to None.
+        borders (bool, optional): If True, draws administrative borders / croquis. Defaults to True.
+        max_dim (Optional[int], optional): Max pixel dimension or 0 for uncompressed native. Defaults to None.
+        satellite (Optional[str], optional): Explicit satellite identifier (G16, G19, auto). Defaults to None.
     """
     utc = time.gmtime()
     tenMinutesAgo = time.time() - ( 60 * 10 )
@@ -605,14 +937,27 @@ def source_AWS(label: bool = False, watermark: Optional[str] = None) -> None:
     hours.append(hour)
     minutes.append(minute)
     prepare_folders(dates)
-    flist = download(dates,hours,minutes)
+
+    overlap_cfg = _cfg_get('performance', 'enable_pipeline_overlap', default=True)
+    enable_overlap = bool(overlap_cfg) if overlap_cfg is not None else True
+
+    if enable_overlap:
+        flist = download_and_pipeline(
+            dates, hours, minutes,
+            on_file_ready=lambda f: processImage(
+                f, label=label, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim
+            ),
+            satellite=satellite
+        )
+    else:
+        flist = download(dates, hours, minutes, satellite=satellite)
+        if flist:
+            for aFile in flist:
+                processImage(aFile, label=label, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim)
 
     if not flist:
         logging.warning("No files were downloaded. The requested scan may not yet be published on NOAA S3.")
         return
-
-    for aFile in flist:
-        processImage(aFile, label=label, watermark=watermark)
 
 def manual_date(
     dates: List[str],
@@ -622,7 +967,12 @@ def manual_date(
     lon: Optional[Union[float, List[float]]] = None,
     label: bool = False,
     bullseye: bool = True,
-    watermark: Optional[str] = None
+    watermark: Optional[str] = None,
+    overwrite: bool = False,
+    family: Optional[str] = None,
+    borders: bool = True,
+    max_dim: Optional[int] = None,
+    satellite: Optional[str] = None
 ) -> None:
     """
     Orchestrates manual, targeted satellite imagery generation for specific timestamps and coordinates.
@@ -637,16 +987,36 @@ def manual_date(
         bullseye (bool, optional): If True, renders concentric nautical mile distance rings.
             If False, plots numbered waypoints (P1, P2, ...). Defaults to True.
         watermark (Optional[str], optional): Custom watermark or attribution string. Defaults to None.
+        overwrite (bool, optional): If True, forces product re-generation. Defaults to False.
+        family (Optional[str], optional): Colormap enhancement family ('default' or 'noaa'). Defaults to None.
+        borders (bool, optional): If True, draws administrative borders / croquis. Defaults to True.
+        max_dim (Optional[int], optional): Max pixel dimension or 0 for uncompressed native. Defaults to None.
+        satellite (Optional[str], optional): Explicit satellite identifier (G16, G19, auto). Defaults to None.
     """
     prepare_folders(dates)
-    flist = download(dates,hours,minutes)
+
+    overlap_cfg = _cfg_get('performance', 'enable_pipeline_overlap', default=True)
+    enable_overlap = bool(overlap_cfg) if overlap_cfg is not None else True
+
+    if enable_overlap:
+        flist = download_and_pipeline(
+            dates, hours, minutes,
+            on_file_ready=lambda f: processImage(
+                f, lat=lat, lon=lon, label=label, bullseye=bullseye, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim
+            ),
+            satellite=satellite
+        )
+    else:
+        flist = download(dates, hours, minutes, satellite=satellite)
+        if flist:
+            for aFile in flist:
+                processImage(
+                    aFile, lat, lon, label=label, bullseye=bullseye, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim
+                )
 
     if not flist:
         logging.warning("No files were downloaded for the specified dates and times.")
         return
-          
-    for aFile in flist:
-        processImage(aFile, lat, lon, label=label, bullseye=bullseye, watermark=watermark)
 
 def get_band(nombre_archivo: str, isString: bool) -> Union[int, str, None]:
     """
@@ -700,17 +1070,133 @@ def get_bounding_box(lat: float, lon: float, radius_miles: float = 100) -> List[
 
     return [west, south, east, north]
 
-def processImage(aFile: str, lat: Optional[Union[float, List[float]]] = None, lon: Optional[Union[float, List[float]]] = None, label: bool = False, bullseye: bool = True, watermark: Optional[str] = None) -> None:
+def resolve_colormap_and_limits(
+    band: int,
+    family: Optional[str] = None,
+    base_path: str = ""
+) -> Tuple[Any, float, float]:
+    """
+    Resolves the colormap and physical dynamic range [clim_min, clim_max] for a given ABI band
+    based on the configured enhancement family ('default' or 'noaa').
+
+    Priority lookup:
+    1. If family is specified (e.g. 'noaa' or 'default'):
+       - Checks `app/colors/{family}/ch{band:02d}.cpt`
+       - Checks `app/colors/ch{band:02d}_{family}.cpt`
+    2. Fallback to root `app/colors/ch{band:02d}.cpt`
+    3. Legacy fallback (colors.rainbow for C13, WV_red_black for C08-10, grey255 for C01-06, etc.)
+
+    Args:
+        band (int): Spectral channel number (1 to 16).
+        family (Optional[str], optional): Enhancement family identifier. Defaults to None.
+        base_path (str, optional): Base project directory path. Defaults to "".
+
+    Returns:
+        Tuple[Any, float, float]: (colormap, clim_min, clim_max)
+    """
+    if family is None:
+        family = _cfg_get('colors', 'family', 'enhancement_family', default='default')
+    norm_family = str(family).strip().lower()
+    c16_color_enabled = bool(_cfg_get('colors', 'c16_color_enhanced', 'c16_enhanced', default=False))
+
+    # Dynamic limits per family
+    if norm_family == 'noaa':
+        if band <= 6:
+            clim_min, clim_max = 0.0, 1.0
+        elif band == 7:
+            clim_min, clim_max = -90.0, 130.0
+        elif 8 <= band <= 10:
+            clim_min, clim_max = -90.0, 20.0
+        elif 11 <= band <= 15:
+            clim_min, clim_max = -110.0, 55.0
+        else:  # Band 16
+            if c16_color_enabled:
+                clim_min, clim_max = -110.0, 55.0
+            else:
+                clim_min, clim_max = -120.0, 50.0
+    else:
+        # Default family limits
+        if band <= 6:
+            clim_min, clim_max = 0.0, 1.0
+        elif band == 7:
+            clim_min, clim_max = -90.0, 130.0
+        elif 8 <= band <= 10:
+            clim_min, clim_max = -85.0, -30.0
+        else:
+            clim_min, clim_max = -90.0, 50.0
+
+    colors_dir = os.path.join(base_path, config['paths']['colors'])
+
+    # Default family preservation for Band 13: Oklahoma Convective Rainbow
+    if norm_family == 'default' and band == 13 and colors and hasattr(colors, 'rainbow'):
+        return colors.rainbow, clim_min, clim_max
+
+    # Priority lookup candidates
+    candidates = []
+    if band == 16 and c16_color_enabled:
+        candidates.extend([
+            os.path.join(colors_dir, norm_family, "ch16_bd.cpt"),
+            os.path.join(colors_dir, "ch16_bd.cpt"),
+            os.path.join(colors_dir, norm_family, "ch13.cpt"),
+        ])
+    candidates.extend([
+        os.path.join(colors_dir, norm_family, f"ch{band:02d}.cpt"),
+        os.path.join(colors_dir, f"ch{band:02d}_{norm_family}.cpt"),
+        os.path.join(colors_dir, f"ch{band:02d}.cpt"),
+    ])
+
+    for cand in candidates:
+        if os.path.exists(cand):
+            cpt_dict = loadCPT(cand)
+            if cpt_dict is not None and LinearSegmentedColormap is not None:
+                cpt_cmap = LinearSegmentedColormap(f'cpt_ch{band:02d}_{norm_family}', cpt_dict)
+                # In default family, WV palettes (8-10) were historically inverted
+                if norm_family != 'noaa' and 8 <= band <= 10:
+                    cpt_cmap = cpt_cmap.reversed()
+                return cpt_cmap, clim_min, clim_max
+
+    # Legacy fallbacks
+    cmap = None
+    if band <= 6:
+        cpt = loadCPT(os.path.join(colors_dir, "grey255.cpt"))
+        cmap = LinearSegmentedColormap('cpt', cpt) if (cpt and LinearSegmentedColormap) else 'gray'
+    elif band == 7:
+        cpt = loadCPT(os.path.join(colors_dir, "thermal.cpt"))
+        cmap = LinearSegmentedColormap('cpt', cpt) if (cpt and LinearSegmentedColormap) else 'inferno'
+    elif 8 <= band <= 10:
+        cpt = loadCPT(os.path.join(colors_dir, "WV_red_black.cpt"))
+        cmap = LinearSegmentedColormap('cpt', cpt).reversed() if (cpt and LinearSegmentedColormap) else 'viridis'
+    elif band == 13:
+        cmap = colors.rainbow if (colors and hasattr(colors, 'rainbow')) else 'rainbow'
+    else:
+        cmap = colors.rainbow if (colors and hasattr(colors, 'rainbow')) else 'rainbow'
+
+    return cmap, clim_min, clim_max
+
+def processImage(
+    aFile: str,
+    lat: Optional[Union[float, List[float]]] = None,
+    lon: Optional[Union[float, List[float]]] = None,
+    label: bool = False,
+    bullseye: bool = True,
+    watermark: Optional[str] = None,
+    overwrite: bool = False,
+    family: Optional[str] = None,
+    borders: bool = True,
+    max_dim: Optional[int] = None
+) -> None:
     """
     Executes the scientific cartographic and raster processing pipeline for a GOES ABI NetCDF file.
 
     Workflow:
-        1. Metadata Extraction: Parses observation timestamp, spatial resolution, and band properties.
-        2. Geostationary Reprojection: Remaps raw geostationary perspective grid to Equirectangular (WGS84).
-        3. Physical Calibration: Inverts Planck function for thermal IR or computes gamma-enhanced solar reflectance.
-        4. Dynamic Memory Bounding: Constrains maximum dimensions via Lanczos spatial resampling.
-        5. Vector Overlays: Renders national borders, department boundaries, waypoints, and range rings.
-        6. Cartographic Publishing:
+        1. Output Cache Validation: Checks if rendered products (.png, .tif) already exist,
+           skipping CPU-intensive remapping when overwrite=False.
+        2. Metadata Extraction: Parses observation timestamp, spatial resolution, and band properties.
+        3. Geostationary Reprojection: Remaps raw geostationary perspective grid to Equirectangular (WGS84).
+        4. Physical Calibration: Inverts Planck function for thermal IR or computes gamma-enhanced solar reflectance.
+        5. Dynamic Memory Bounding: Constrains maximum dimensions via Lanczos spatial resampling.
+        6. Vector Overlays: Renders national borders, department boundaries, waypoints, and range rings.
+        7. Cartographic Publishing:
            - Visual PNG image with calibrated CPT colormaps and metadata banner.
            - ESRI Worldfile (.pgw) specifying affine transformation parameters.
            - 16-bit GeoTIFF raster (T_B * 100 scaled integer) with LZW compression.
@@ -722,27 +1208,61 @@ def processImage(aFile: str, lat: Optional[Union[float, List[float]]] = None, lo
         label (bool, optional): If True, adds colorbar, scale, and metadata footer. Defaults to False.
         bullseye (bool, optional): If True, draws concentric nautical-mile range rings. Defaults to True.
         watermark (Optional[str], optional): Custom institution or attribution banner. Defaults to None.
+        overwrite (bool, optional): If True, re-renders products even if they exist. Defaults to False.
+        family (Optional[str], optional): Colormap enhancement family ('default' or 'noaa'). Defaults to None.
+        borders (bool, optional): If True, draws administrative borders / croquis. Defaults to True.
+        max_dim (Optional[int], optional): Max pixel dimension or 0 for uncompressed native. Defaults to None.
 
     Returns:
         None
     """
-    matplotlib.rcParams['figure.dpi'] = 100
-    #print(f"Matplotlib default DPI after setting: {matplotlib.rcParams['figure.dpi']}")
+    if matplotlib is not None:
+        matplotlib.rcParams['figure.dpi'] = 100
 
     Start = (aFile[aFile.find("_s")+2:aFile.find("_e")])
 
     Band = get_band(aFile, True)
     BandString = get_band(aFile, False)
+    if Band is None or BandString is None:
+        logging.warning("No se pudo identificar la banda para el archivo %s", aFile)
+        return
 
     Wavelenghts = ['[]', '[0.47 μm]', '[0.64 μm]', '[0.865 μm]', '[1.378 μm]', '[1.61 μm]', '[2.25 μm]', '[3.90 μm]', '[6.19 μm]', '[6.95 μm]', '[7.34 μm]', '[8.50 μm]', '[9.61 μm]', '[10.35 μm]', '[11.20 μm]', '[12.30 μm]', '[13.30 μm]']
 
     year = int(Start[0:4])
     dayjulian = int(Start[4:7])
     dayjulianstring = Start[4:7]
+    hour = Start[7:9]
+    minute = Start[9:11]
 
     dayconventional = datetime(int(year), 1, 1) + timedelta(days=int(dayjulian) - 1)
-    date = dayconventional.strftime('%d-%b-%Y')
+    timestamp_str = f"{dayconventional.strftime('%Y%m%d')}{hour}{minute}"
 
+    outFolder = os.path.join(basePath, config['paths']['output'], dayjulianstring, "C" + BandString)
+    expected_image_out = os.path.join(outFolder, f"{timestamp_str}.png")
+    expected_tif_out = os.path.join(outFolder, f"{timestamp_str}.tif")
+
+    # Fast output cache check: skip remapping and rendering if products already exist
+    if not overwrite and os.path.exists(expected_image_out):
+        if not generateTiff or os.path.exists(expected_tif_out):
+            latest_folder = os.path.join(basePath, "latest")
+            latest_png = os.path.join(latest_folder, f"latestC{BandString}.png")
+            latest_pgw = os.path.join(latest_folder, f"latestC{BandString}.pgw")
+            expected_pgw_out = os.path.join(outFolder, f"{timestamp_str}.pgw")
+            create_folder(latest_folder)
+            try:
+                shutil.copyfile(expected_image_out, latest_png)
+                if os.path.exists(expected_pgw_out):
+                    shutil.copyfile(expected_pgw_out, latest_pgw)
+            except Exception as e:
+                logging.debug("Could not copy cached image to latest: %s", e)
+            logging.info(
+                f"[Cache Hit] Image products already exist for Channel {BandString} "
+                f"({timestamp_str}.png). Skipping remapping and rendering."
+            )
+            return
+
+    date = dayconventional.strftime('%d-%b-%Y')
     time = Start[7:9] + ":" + Start[9:11] + " UTC"
 
     if Band <= 6:
@@ -750,7 +1270,18 @@ def processImage(aFile: str, lat: Optional[Union[float, List[float]]] = None, lo
     else:
         Unit = "Brightness Temperature [°C]"
 
-    Title = dsatellite.upper().replace("GOES", "GOES-") + " Band " + str(Band) + " " + Wavelenghts[int(Band)] + " " + Unit + " " + date + "  " + time
+    file_sat = dsatellite.upper().replace("GOES", "GOES-")
+    a_base = os.path.basename(aFile).upper()
+    if "_G16_" in a_base or "_G16." in a_base or "GOES16" in a_base:
+        file_sat = "GOES-16"
+    elif "_G19_" in a_base or "_G19." in a_base or "GOES19" in a_base:
+        file_sat = "GOES-19"
+    elif "_G18_" in a_base or "GOES18" in a_base:
+        file_sat = "GOES-18"
+    elif "_G17_" in a_base or "GOES17" in a_base:
+        file_sat = "GOES-17"
+
+    Title = file_sat + " Band " + str(Band) + " " + Wavelenghts[int(Band)] + " " + Unit + " " + date + "  " + time
     Institution = watermark if watermark is not None else institucion
 
     if os.path.exists(aFile):
@@ -808,9 +1339,9 @@ def processImage(aFile: str, lat: Optional[Union[float, List[float]]] = None, lo
     data = grid.ReadAsArray()
     #print(f"Initial data shape: {data.shape}")
 
-    max_dim = 1024
-    if data.shape[1] > max_dim or data.shape[0] > max_dim:
-        scale = min(max_dim / data.shape[1], max_dim / data.shape[0])
+    target_max_dim = max_dim if max_dim is not None else int(_cfg_get('plotting', 'max_dimension', 'max_dim', default=2048))
+    if target_max_dim > 0 and (data.shape[1] > target_max_dim or data.shape[0] > target_max_dim):
+        scale = min(target_max_dim / data.shape[1], target_max_dim / data.shape[0])
         new_width = int(data.shape[1] * scale)
         new_height = int(data.shape[0] * scale)
         #print(f"Resizing data from {data.shape} to ({new_height}, {new_width})")
@@ -818,17 +1349,30 @@ def processImage(aFile: str, lat: Optional[Union[float, List[float]]] = None, lo
         data = np.array(Image.fromarray(data.astype(np.float32)).resize((new_width, new_height), resample_filter))
     #print(f"Adjusted data shape: {data.shape}")
 
+    planck_coeffs = None
+    if 'planck_fk1' in ncImage.variables:
+        try:
+            planck_coeffs = {
+                'fk1': float(ncImage.variables['planck_fk1'][:]),
+                'fk2': float(ncImage.variables['planck_fk2'][:]),
+                'bc1': float(ncImage.variables['planck_bc1'][:]),
+                'bc2': float(ncImage.variables['planck_bc2'][:]),
+            }
+        except Exception:
+            planck_coeffs = None
+
+    norm_family = str(family if family is not None else _cfg_get('colors', 'family', 'enhancement_family', default='default')).strip().lower()
+
     channel_str = f"C{Band:02d}"
     if Band <= 6:
-        data = R2RT(data, channel_str)
-    elif Band > 7 and Band < 11:
-        data = R2BT_WV_visual(data, channel_str)
+        data = R2RT(data, channel_str, day_julian=dayjulian)
+    elif 8 <= Band <= 10:
+        if norm_family == 'default':
+            data = R2BT_WV_visual(data, channel_str)
+        else:
+            data = R2BT(data, channel_str, coeffs=planck_coeffs)
     else:
-        data = R2BT(data, channel_str)
-
-    #print(f"Sample data values after processing (first 5x5): {data[:5, :5]}")
-    data_stats = [data.min(), data.max(), data.mean(), data.std()]
-    #print(f"Data stats after processing (min, max, mean, stddev): {data_stats}")
+        data = R2BT(data, channel_str, coeffs=planck_coeffs)
 
     ncImage.close()
     ncImage = None
@@ -871,26 +1415,9 @@ def processImage(aFile: str, lat: Optional[Union[float, List[float]]] = None, lo
     data_for_png = data  # Use the original data array
 
     im = ax.imshow(data_for_png, origin='upper', extent=norm_extent, interpolation='bilinear', aspect='equal', zorder=1)
-    colors_dir = os.path.join(basePath, config['paths']['colors'])
-    if Band <= 6:
-        cpt = loadCPT(os.path.join(colors_dir, "grey255.cpt"))
-        cpt_convert = LinearSegmentedColormap('cpt', cpt)
-        im.set_cmap(cpt_convert)
-        im.set_clim(0, 1)
-    elif Band == 7:
-        cpt = loadCPT(os.path.join(colors_dir, "thermal.cpt"))
-        cpt_convert = LinearSegmentedColormap('cpt', cpt)
-        im.set_cmap(cpt_convert)
-        im.set_clim(-112.15, 56.85)
-    elif Band > 7 and Band < 11:
-        cpt = loadCPT(os.path.join(colors_dir, "WV_red_black.cpt"))
-        cpt_convert = LinearSegmentedColormap('cpt', cpt)
-        cpt_convert_reversed = cpt_convert.reversed()
-        im.set_cmap(cpt_convert_reversed)
-        im.set_clim(-85, -30)
-    elif Band > 10:
-        im.set_cmap(colors.rainbow)
-        im.set_clim(-90, 50)
+    cpt_cmap, clim_min, clim_max = resolve_colormap_and_limits(Band, family=family, base_path=basePath)
+    im.set_cmap(cpt_cmap)
+    im.set_clim(clim_min, clim_max)
 
     ax.set_xlim(0, data.shape[1])
     ax.set_ylim(0, data.shape[0])
@@ -902,29 +1429,39 @@ def processImage(aFile: str, lat: Optional[Union[float, List[float]]] = None, lo
         y_norm = (lat - extent[1]) / lat_range * data_shape[0]
         return x_norm, y_norm
 
-    dpto_shape = _cfg_get('shapes', 'departments', 'departamentos', default='MGN_DPTO_POLITICO')
-    dpto_layer = _cfg_get('shapes', 'departments_layer', 'departamentos_layer', default='MGN_DPTO_POLITICO')
-    shapefile_path = os.path.join(basePath, config['paths']['shapes'], dpto_shape)
-    bmap.readshapefile(shapefile_path, dpto_layer, drawbounds=False)
+    draw_borders = borders and bool(_cfg_get('plotting', 'show_borders', default=True))
+    draw_departments = draw_borders and bool(_cfg_get('plotting', 'show_departments', default=True))
+    draw_countries = draw_borders and bool(_cfg_get('plotting', 'show_countries', default=True))
 
-    for shape in getattr(bmap, dpto_layer, []):
-        x = [point[0] for point in shape]
-        y = [point[1] for point in shape]
-        x_norm = [(lon - extent[0]) / (extent[2] - extent[0]) * data.shape[1] for lon in x]
-        y_norm = [(lat - extent[1]) / (extent[3] - extent[1]) * data.shape[0] for lat in y]
-        ax.plot(x_norm, y_norm, color='white', linewidth=0.6, zorder=2)
+    if draw_departments:
+        dpto_shape = _cfg_get('shapes', 'departments', 'departamentos', default='MGN_DPTO_POLITICO')
+        dpto_layer = _cfg_get('shapes', 'departments_layer', 'departamentos_layer', default='MGN_DPTO_POLITICO')
+        shapefile_path = os.path.join(basePath, config['paths']['shapes'], dpto_shape)
+        try:
+            bmap.readshapefile(shapefile_path, dpto_layer, drawbounds=False)
+            for shape in getattr(bmap, dpto_layer, []):
+                x = [point[0] for point in shape]
+                y = [point[1] for point in shape]
+                x_norm = [(lon_pt - extent[0]) / (extent[2] - extent[0]) * data.shape[1] for lon_pt in x]
+                y_norm = [(lat_pt - extent[1]) / (extent[3] - extent[1]) * data.shape[0] for lat_pt in y]
+                ax.plot(x_norm, y_norm, color='white', linewidth=0.6, zorder=2)
+        except Exception as e:
+            logging.debug("Could not plot department shapefile: %s", e)
 
-    country_shape = _cfg_get('shapes', 'countries', 'paises', default='ne_10m_admin_0_countries/ne_10m_admin_0_countries')
-    country_layer = _cfg_get('shapes', 'countries_layer', 'paises_layer', default='countries')
-    country_shapefile_path = os.path.join(basePath, config['paths']['shapes'], country_shape)
-    bmap.readshapefile(country_shapefile_path, country_layer, drawbounds=False)
-
-    for shape in getattr(bmap, country_layer, []):
-        x = [point[0] for point in shape]
-        y = [point[1] for point in shape]
-        x_norm = [(lon - extent[0]) / (extent[2] - extent[0]) * data.shape[1] for lon in x]
-        y_norm = [(lat - extent[1]) / (extent[3] - extent[1]) * data.shape[0] for lat in y]
-        ax.plot(x_norm, y_norm, color='white', linewidth=0.6, zorder=2)
+    if draw_countries:
+        country_shape = _cfg_get('shapes', 'countries', 'paises', default='ne_10m_admin_0_countries/ne_10m_admin_0_countries')
+        country_layer = _cfg_get('shapes', 'countries_layer', 'paises_layer', default='countries')
+        country_shapefile_path = os.path.join(basePath, config['paths']['shapes'], country_shape)
+        try:
+            bmap.readshapefile(country_shapefile_path, country_layer, drawbounds=False)
+            for shape in getattr(bmap, country_layer, []):
+                x = [point[0] for point in shape]
+                y = [point[1] for point in shape]
+                x_norm = [(lon_pt - extent[0]) / (extent[2] - extent[0]) * data.shape[1] for lon_pt in x]
+                y_norm = [(lat_pt - extent[1]) / (extent[3] - extent[1]) * data.shape[0] for lat_pt in y]
+                ax.plot(x_norm, y_norm, color='white', linewidth=0.6, zorder=2)
+        except Exception as e:
+            logging.debug("Could not plot countries shapefile: %s", e)
 
     if lat is not None and lon is not None:
         # Asegurar que sean listas para iterar
@@ -1042,6 +1579,7 @@ def processImage(aFile: str, lat: Optional[Union[float, List[float]]] = None, lo
     imageOut_latest = os.path.join(outFolder, "latestC" + BandString + ".png")
     logging.debug("Imagen latest: %s", imageOut_latest)
     plt.savefig(imageOut_latest, dpi=DPI, pad_inches=0)
+    plt.close(fig)
 
     # Calculate resolutions based on the full data shape
     resl_x = abs(extent[3] - extent[1]) / (data.shape[0] -1)  # Latitude resolution
@@ -1256,6 +1794,48 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help='Custom watermark or attribution label on the bottom bar'
     )
+    parser.add_argument(
+        '--overwrite', '--force',
+        dest='overwrite',
+        type=lambda x: str(x).lower() in ('true', '1', 'yes'),
+        default=bool(_cfg_get('general', 'overwrite', 'overwrite_images', default=False)),
+        help='Force re-generation of products even if they already exist in output/ (True/False)'
+    )
+    parser.add_argument(
+        '--family', '--palette', '--enhancement',
+        dest='family',
+        type=str,
+        default=str(_cfg_get('colors', 'family', 'enhancement_family', default='default')),
+        help="Colormap enhancement family ('default' or 'noaa'). Defaults to 'default'."
+    )
+    parser.add_argument(
+        '--c16-enhanced', '--c16-color',
+        dest='c16_enhanced',
+        type=lambda x: str(x).lower() in ('true', '1', 'yes'),
+        default=bool(_cfg_get('colors', 'c16_color_enhanced', 'c16_enhanced', default=False)),
+        help='Display Band 16 (CO2) with convective color enhancement instead of grayscale (True/False)'
+    )
+    parser.add_argument(
+        '--borders', '--croquis',
+        dest='borders',
+        type=lambda x: str(x).lower() in ('true', '1', 'yes'),
+        default=bool(_cfg_get('plotting', 'show_borders', default=True)),
+        help='Draw vector administrative boundaries (departments and countries / croquis) (True/False)'
+    )
+    parser.add_argument(
+        '--max-dim', '--resolution-px',
+        dest='max_dim',
+        type=int,
+        default=None,
+        help='Max pixel dimension for output image (e.g. 1024, 2048, 4096, or 0 for native resolution). Defaults to config value.'
+    )
+    parser.add_argument(
+        '--satellite', '--sat',
+        dest='satellite',
+        type=str,
+        default=None,
+        help='Target GOES satellite (G16, G19, or auto). Defaults to auto (G16 before April 7, 2025, G19 after).'
+    )
     return parser
 
 def main(argv: Optional[List[str]] = None) -> None:
@@ -1355,11 +1935,25 @@ def main(argv: Optional[List[str]] = None) -> None:
                 final_lon,
                 args.label,
                 args.bullseye,
-                watermark=args.watermark
+                watermark=args.watermark,
+                overwrite=args.overwrite,
+                family=args.family,
+                borders=args.borders,
+                max_dim=args.max_dim,
+                satellite=args.satellite
             )
 
     elif args.mode == "auto":
-        auto_date(args.source, args.label, watermark=args.watermark)
+        auto_date(
+            args.source,
+            args.label,
+            watermark=args.watermark,
+            overwrite=args.overwrite,
+            family=args.family,
+            borders=args.borders,
+            max_dim=args.max_dim,
+            satellite=args.satellite
+        )
 
     else:
         logging.error('Unknown execution mode: %s. Use: manual | auto', args.mode)

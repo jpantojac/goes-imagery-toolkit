@@ -49,18 +49,54 @@ $$R_{\gamma} = \sqrt{\text{clip}(R, 0, 1)}$$
 
 ---
 
-## 🛰️ ABI Band Reference Guide
+## 🛰️ ABI Band Reference & Scientific Enhancements (RAMMB/CIRA)
 
-| Band | Central $\lambda$ | Spectrum | Native Res. | Meteorological Application |
-|:---:|:---:|:---:|:---:|:---|
-| **C01** | $0.47\ \mu\text{m}$ | Visible (Blue) | 1 km | Daytime aerosol, smoke detection, atmospheric haze |
-| **C02** | $0.64\ \mu\text{m}$ | Visible (Red) | 0.5 km | Daytime cloud, storm tracking, terrain & land monitoring |
-| **C03** | $0.86\ \mu\text{m}$ | Near-IR (Veggie) | 1 km | Vegetation index (NDVI), burn scars, water body delineation |
-| **C07** | $3.90\ \mu\text{m}$ | Shortwave IR | 2 km | Wildfire detection, hot spot analysis, fog/low stratus detection |
-| **C08** | $6.19\ \mu\text{m}$ | Upper Troposphere WV | 2 km | High-altitude atmospheric winds, jet stream dynamics |
-| **C09** | $6.95\ \mu\text{m}$ | Mid Troposphere WV | 2 km | Mid-tropospheric moisture, synoptic vorticity tracking |
-| **C10** | $7.34\ \mu\text{m}$ | Lower Troposphere WV | 2 km | Low-level humidity, precursor to convective storm initiation |
-| **C13** | $10.35\ \mu\text{m}$ | Clean Longwave IR | 2 km | Cloud-top temperature, convective storm depth, severe weather |
+The toolkit provides dedicated scientific colormaps (`ch01.cpt` through `ch16.cpt`) inspired by NOAA RAMMB/CIRA standards, tailored for meteorological and environmental phenomena:
+
+| Band | Central $\lambda$ | Spectrum | Native Res. | Colormap | Meteorological Application |
+|:---:|:---:|:---:|:---:|:---:|:---|
+| **C01** | $0.47\ \mu\text{m}$ | Visible (Blue) | 1 km | `ch01.cpt` | Daytime aerosol, smoke detection, atmospheric haze (Grayscale reflective) |
+| **C02** | $0.64\ \mu\text{m}$ | Visible (Red) | 0.5 km | `ch02.cpt` | High-resolution daytime cloud, storm tracking, terrain & land |
+| **C03** | $0.86\ \mu\text{m}$ | Near-IR (Veggie) | 1 km | `ch03.cpt` | Chlorophyll/NDVI, burn scars, water body delineation |
+| **C04** | $1.37\ \mu\text{m}$ | Near-IR (Cirrus) | 2 km | `ch04.cpt` | Faint high-altitude cirrus cloud detection against dark surface |
+| **C05** | $1.61\ \mu\text{m}$ | Near-IR (Snow/Ice) | 1 km | `ch05.cpt` | Snow vs. water-cloud discrimination (ice absorption) |
+| **C06** | $2.25\ \mu\text{m}$ | Near-IR (Cloud Size) | 2 km | `ch06.cpt` | Cloud particle effective radius, microphysics |
+| **C07** | $3.90\ \mu\text{m}$ | Shortwave IR | 2 km | `ch07.cpt` | Wildfire & hotspot detection, nocturnal fog/stratus |
+| **C08** | $6.19\ \mu\text{m}$ | Upper Troposphere WV | 2 km | `ch08.cpt` | Upper-level jet streams, dry slots, dynamical vorticity |
+| **C09** | $6.95\ \mu\text{m}$ | Mid Troposphere WV | 2 km | `ch09.cpt` | Mid-tropospheric moisture, synoptic circulation (WV red-black) |
+| **C10** | $7.34\ \mu\text{m}$ | Lower Troposphere WV | 2 km | `ch10.cpt` | Low-level humidity, convective storm precursors |
+| **C11** | $8.50\ \mu\text{m}$ | Cloud-Top Phase | 2 km | `ch11.cpt` | Cloud thermodynamic phase (ice vs liquid), volcanic $SO_2$ |
+| **C12** | $9.61\ \mu\text{m}$ | Ozone | 2 km | `ch12.cpt` | Total column ozone, stratospheric intrusions |
+| **C13** | $10.35\ \mu\text{m}$ | Clean Longwave IR | 2 km | `ch13.cpt` | Primary cloud-top temperature, convective storms (Realce Oklahoma / Rainbow) |
+| **C14** | $11.20\ \mu\text{m}$ | Traditional Longwave IR| 2 km | `ch14.cpt` | Dvorak hurricane intensity analysis, SST validation |
+| **C15** | $12.30\ \mu\text{m}$ | Dirty Longwave IR | 2 km | `ch15.cpt` | Low-level moisture correction, airborne dust & sandstorms |
+| **C16** | $13.30\ \mu\text{m}$ | $CO_2$ Longwave IR | 2 km | `ch16.cpt` | Cloud-top height estimation, tropospheric cooling |
+
+### 🎨 Enhancement Families (`default` vs `noaa`)
+
+The toolkit provides a modular enhancement families architecture allowing users to select or customize color palettes across all 16 ABI channels without altering existing files:
+
+* **`default` Family (`--family=default`)**:
+  - **Band 13**: Convective Rainbow / Oklahoma enhancement (`colors.rainbow` / `oklahoma.cpt`, $[-90^\circ\text{C}, 50^\circ\text{C}]$).
+  - **Band 09**: Mid-tropospheric Water Vapor (`WV_red_black.cpt`, $[-85^\circ\text{C}, -30^\circ\text{C}]$).
+  - **Band 01**: Grayscale solar reflectance (`grey255.cpt`, $[0.0, 1.0]$).
+  - **Bands 02–16**: Scientific RAMMB/CIRA palettes (`app/colors/default/chXX.cpt`).
+
+* **`noaa` Family (`--family=noaa`)**:
+  - Official operational full-disk palettes as published on NOAA/NESDIS/NHC ([goes.noaa.gov](https://goes.noaa.gov/fulldisk.php?sat=G19&src=nhc)).
+  - **Bands 01–06**: Linear TOA reflectance grayscale ($[0.0, 1.0]$).
+  - **Band 07**: Shortwave IR / Fire temperature anomaly ($[-90^\circ\text{C}, 130^\circ\text{C}]$).
+  - **Bands 08–10**: NOAA Water Vapor ($[-90^\circ\text{C}, 20^\circ\text{C}]$).
+  - **Bands 11–15**: NOAA Longwave IR window BD/NHC curve ($[-110^\circ\text{C}, 55^\circ\text{C}]$).
+  - **Band 16**: Inverted thermal grayscale ($[-120^\circ\text{C}, 50^\circ\text{C}]$).
+
+Configure the global enhancement family in `app/config.yaml`:
+```yaml
+colors:
+  family: "default"   # "default" or "noaa" (can be overridden with --family CLI flag)
+```
+
+Custom user families can be added by placing `ch01.cpt` through `ch16.cpt` inside `app/colors/<family_name>/` or using the filename pattern `app/colors/chXX_<family_name>.cpt`.
 
 ---
 
@@ -97,14 +133,35 @@ flowchart LR
 
 Run the containerized environment with all system dependencies (GDAL, PROJ, GEOS) pre-configured:
 
-```bash
-docker compose up -d
-docker compose exec app bash
-```
+1. **Start the Docker stack in the background**:
+   ```bash
+   docker compose up -d
+   ```
+
+2. **Execute commands directly from your host terminal**:
+   ```bash
+   # Manual mode for specific observation date & time:
+   docker compose exec app python main.py --mode="manual" --source="aws" --date=20240929 --hours=11 --minutes=00
+
+   # Automated near-real-time stream:
+   docker compose exec app python main.py --mode="auto" --source="aws" --label=true
+   ```
+
+3. **Or open an interactive Bash shell inside the container**:
+   ```bash
+   docker compose exec app bash
+   # Inside the /app working directory:
+   python main.py --mode="auto" --source="aws" --label=true
+   ```
 
 ---
 
 ## 🚀 Usage Guide
+
+> [!TIP]
+> **Running with Docker vs. Conda**:
+> - **With Conda (Local Environment)**: Run `python app/main.py [flags...]` from the repository root.
+> - **With Docker (Containerized)**: Run `docker compose exec app python main.py [flags...]` directly from your host shell.
 
 The tool supports two execution modes: **Manual** (historical events and targeted coordinates) and **Automated** (near-real-time streaming).
 
@@ -145,6 +202,19 @@ python app/main.py \
   --label=true
 ```
 
+#### Example 4: High-Resolution Clean Imagery Without Borders / Croquis
+Generate ultra-sharp satellite images (e.g. at 4096px resolution or native resolution `--max-dim=0`) without vector outlines or administrative borders:
+```bash
+python app/main.py \
+  --mode="manual" \
+  --source="aws" \
+  --date=20240929 \
+  --hours=11 \
+  --minutes=00 \
+  --croquis=false \
+  --max-dim=4096
+```
+
 ### 2. Automated Mode (Near Real-Time)
 
 Download and generate products for the most recent observation from the NOAA public S3 bucket:
@@ -166,6 +236,35 @@ python app/main.py --mode="auto" --source="aws" --label=true
 | `--label` | | `bool` | `False` | Render title bar, colorbar, and metadata (`true`/`false`). |
 | `--bullseye` | | `bool` | `True` | Draw concentric range rings (`true`) or marker pins (`false`). |
 | `--watermark` | `--institution`, `--institucion` | `str` | `config.yaml` | Custom label or institution text rendered on bottom bar. |
+| `--overwrite` | `--force` | `bool` | `False` | Force re-generation of products even if `.png` and `.tif` already exist (`true`/`false`). |
+| `--family` | `--palette`, `--enhancement` | `str` | `default` | Colormap enhancement family: `default` (Oklahoma on C13, WV on C09) or `noaa` (official goes.noaa.gov full-disk palettes). |
+| `--c16-enhanced` | `--c16-color` | `bool` | `False` | Display Band 16 (CO2) with convective BD color enhancement instead of thermal grayscale (`true`/`false`). |
+| `--borders` | `--croquis` | `bool` | `True` | Draw administrative vector boundaries (departments and countries / croquis) (`true`/`false`). |
+| `--max-dim` | `--resolution-px` | `int` | `2048` | Maximum output raster dimension in pixels (e.g. `2048`, `4096`, or `0` for uncompressed native resolution). |
+| `--satellite` | `--sat` | `str` | `auto` | Target GOES satellite (`G16`, `G19`, or `auto`). Defaults to `auto`: automatically selects GOES-16 for observations before April 7, 2025 and GOES-19 for subsequent observations. |
+
+---
+
+## ⚡ Performance & Parallel Processing
+
+The toolkit features a concurrent download engine, an asynchronous producer-consumer pipeline, and dual-layer caching designed for high-throughput operational and research workloads:
+
+- **Multi-threaded S3 Ingestion**: Spectral channels (Bands 01 to 16) are retrieved in parallel via `ThreadPoolExecutor` rather than sequential queries, reducing retrieval time by up to **75%**.
+- **Per-Thread Progress Logging**: Ingest progress is logged per thread with percentage bars and channel tags (`[C01]`, `[C13]`), allowing clear monitoring of multi-megabyte transfers.
+- **Asynchronous Pipeline Overlap**: As soon as an individual channel NetCDF finishes downloading, spatial remapping (GDAL) and rendering (Matplotlib) begin immediately in the consumer loop while remaining channels continue downloading in background worker threads.
+- **Dual-Layer Caching Architecture**:
+  1. **Input S3 NetCDF Cache**: Checks for pre-existing raw `.nc` files matching target timestamps on disk (`0 ms` latency), eliminating redundant NOAA S3 queries and saving network bandwidth.
+  2. **Output Product Cache**: Checks if target `.png` (and `.tif` if enabled) already exist in `output/<julian_day>/C<band>/`. If already generated and `--overwrite=false`, remapping and plotting are skipped entirely, completing repeated runs in **under 1 second**. Use `--overwrite=true` or `--force=true` to regenerate.
+
+### Concurrency Configuration (`app/config.yaml`)
+
+Tune worker concurrency to your machine's hardware and network capacity:
+
+```yaml
+performance:
+  max_download_workers: 4       # Concurrent download worker threads (recommended: 4 to 8)
+  enable_pipeline_overlap: true  # Concurrently trigger image processing as downloads complete
+```
 
 ---
 
@@ -193,6 +292,9 @@ latest/
 Run the test suite:
 
 ```bash
+# Run concurrency, caching, and pipeline overlap unit tests
+python -m unittest tests/test_download_concurrency.py
+
 # Run pure radiometric calibration and coordinate validation unit tests
 python -m unittest tests/test_calibration_and_geometry.py
 

@@ -54,9 +54,15 @@ python app/main.py \
 | `--label` | | Define si se muestran título, etiquetas y barra de color (`true`/`false`) | `--label=true` |
 | `--bullseye` | | Anillos concéntricos (`true`) o marcadores numerados P1, P2 (`false`) | `--bullseye=true` |
 | `--watermark` | `--institution`, `--institucion` | Texto personalizado de atribución en la barra inferior | `--watermark="My Lab"` |
+| `--overwrite` | `--force` | Fuerza la regeneración de productos incluso si ya existen en output/ (`true`/`false`) | `--overwrite=true` |
+| `--family` | `--palette`, `--enhancement` | Familia de realces de color: `"default"` (Oklahoma en C13, WV regional) o `"noaa"` (paletas oficiales goes.noaa.gov) | `--family="noaa"` |
+| `--c16-enhanced` | `--c16-color` | Activa realce convectivo BD a color en Canal 16 en lugar de escala de grises (`true`/`false`) | `--c16-enhanced=true` |
+| `--borders` | `--croquis` | Dibuja los límites político-administrativos (países y departamentos / croquis) (`true`/`false`) | `--croquis=false` |
+| `--max-dim` | `--resolution-px` | Dimensión máxima de la imagen en píxeles (ej. `2048`, `4096`, o `0` para resolución nativa sin compresión) | `--max-dim=2048` |
+| `--satellite` | `--sat` | Satélite objetivo (`"G16"`, `"G19"`, o `"auto"`). Por defecto `"auto"` detecta automáticamente según la fecha | `--satellite="G16"` |
 
 ## 4. Directrices Finales para el Agente
 - **Códigos ICAO / Topónimos**: Siempre que el usuario provea una ciudad, departamento o código ICAO (ej. SKCG, SKBO, etc.), es tu responsabilidad como Agente traducir ese identificador a sus coordenadas reales para los parámetros `--lat` y `--lon`.
 - **Formato de Rangos**: `main.py` no acepta notación de rangos como `00-06`. Todos los rangos solicitados por el usuario deben ser expandidos obligatoriamente (ej. `00,01,02,03,04,05,06`).
-- **Contexto de Ejecución**: Siempre verifica que te encuentras en el entorno de Python correcto (Conda `goes-toolkit` o Docker) que tenga instaladas las dependencias del proyecto (`goes`, `matplotlib`, `gdal`, `basemap`, etc.) antes de ejecutar los comandos.
-- **Ajuste de Satélite en `config.yaml`**: Antes de ejecutar la petición, revisa la fecha solicitada y modifica la propiedad `satellite` de `app/config.yaml`. Si la fecha es **anterior al 7 de abril de 2025**, usa `"G16"`. Si es **posterior**, usa `"G19"`.
+- **Contexto de Ejecución**: Siempre verifica que te encuentras en el entorno de Python correcto (Conda `goes-toolkit` o Docker vía `docker compose exec app python main.py`) que tenga instaladas las dependencias del proyecto (`goes`, `matplotlib`, `gdal`, `basemap`, etc.) antes de ejecutar los comandos.
+- **Resolución Automática de Satélite**: El sistema ahora resuelve el satélite **automáticamente** según la fecha: fechas **anteriores al 7 de abril de 2025** descargan automáticamente de **GOES-16** (`noaa-goes16`), y fechas **posteriores** de **GOES-19** (`noaa-goes19`). Ya no es necesario modificar manualmente `app/config.yaml`, a menos que el usuario pida forzar un satélite específico mediante el parámetro `--satellite="G16"` o `--satellite="G19"`.
