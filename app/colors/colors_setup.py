@@ -117,7 +117,7 @@ def get_oklahoma_points():
 
 def build_default_family(dest_dir=None):
     """
-    Builds the default calibrated family (Oklahoma C13, WV C09, Grayscale C01, RAMMB/CIRA others).
+    Builds the default calibrated family (Oklahoma C13, WV C08-C10, Grayscale C01-C06, BD IR C11-C15).
     """
     if dest_dir is None:
         dest_dir = os.path.join(COLORS_DIR, "default")
@@ -129,39 +129,25 @@ def build_default_family(dest_dir=None):
     # CH02: Grayscale reflective
     shutil.copyfile(os.path.join(COLORS_DIR, "grey255.cpt"), os.path.join(dest_dir, "ch02.cpt"))
 
-    # CH03: Veggie Near-IR (0.86 µm)
-    ch03_pts = [
-        (0.00, 0, 0, 0), (0.10, 50, 35, 20), (0.25, 70, 50, 25), (0.40, 30, 110, 35),
-        (0.60, 60, 165, 50), (0.75, 130, 205, 95), (0.90, 210, 240, 200), (1.00, 255, 255, 255)
+    # CH03 - CH06: High-contrast calibrated solar reflectance grayscale (0.0 to 1.0)
+    refl_pts = [
+        (0.00, 0, 0, 0),
+        (0.05, 13, 13, 13),
+        (0.15, 38, 38, 38),
+        (0.30, 80, 80, 80),
+        (0.50, 135, 135, 135),
+        (0.70, 185, 185, 185),
+        (0.85, 225, 225, 225),
+        (1.00, 255, 255, 255)
     ]
-    create_interpolated_cpt(ch03_pts, "ch03.cpt", target_dir=dest_dir)
+    for b in range(3, 7):
+        create_interpolated_cpt(refl_pts, f"ch{b:02d}.cpt", target_dir=dest_dir)
 
-    # CH04: Cirrus (1.37 µm)
-    ch04_pts = [
-        (0.00, 5, 5, 15), (0.10, 25, 10, 45), (0.25, 65, 20, 95), (0.45, 125, 45, 150),
-        (0.70, 190, 110, 215), (0.88, 235, 195, 245), (1.00, 255, 255, 255)
-    ]
-    create_interpolated_cpt(ch04_pts, "ch04.cpt", target_dir=dest_dir)
+    # CH07: Shortwave IR / Fire (NOAA_STOPS_B07, -90°C to +130°C to avoid daytime saturation)
+    create_interpolated_cpt(NOAA_STOPS_B07, "ch07.cpt", target_dir=dest_dir)
 
-    # CH05: Snow/Ice (1.61 µm)
-    ch05_pts = [
-        (0.00, 0, 10, 25), (0.15, 0, 45, 75), (0.35, 0, 100, 140), (0.60, 50, 160, 195),
-        (0.80, 140, 215, 235), (0.95, 220, 245, 250), (1.00, 255, 255, 255)
-    ]
-    create_interpolated_cpt(ch05_pts, "ch05.cpt", target_dir=dest_dir)
-
-    # CH06: Cloud Particle Size (2.25 µm)
-    ch06_pts = [
-        (0.00, 15, 15, 15), (0.15, 60, 35, 10), (0.35, 135, 80, 15), (0.60, 215, 145, 25),
-        (0.80, 250, 205, 70), (0.95, 255, 240, 175), (1.00, 255, 255, 255)
-    ]
-    create_interpolated_cpt(ch06_pts, "ch06.cpt", target_dir=dest_dir)
-
-    # CH07: Shortwave IR (thermal.cpt)
-    shutil.copyfile(os.path.join(COLORS_DIR, "thermal.cpt"), os.path.join(dest_dir, "ch07.cpt"))
-
-    # CH08: Upper WV (SVGAWVX_TEMP.cpt)
-    shutil.copyfile(os.path.join(COLORS_DIR, "SVGAWVX_TEMP.cpt"), os.path.join(dest_dir, "ch08.cpt"))
+    # CH08: Upper WV (WV_red_black.cpt, matching C09 for rich atmospheric moisture contrast)
+    shutil.copyfile(os.path.join(COLORS_DIR, "WV_red_black.cpt"), os.path.join(dest_dir, "ch08.cpt"))
 
     # CH09: Mid WV (WV_red_black.cpt)
     shutil.copyfile(os.path.join(COLORS_DIR, "WV_red_black.cpt"), os.path.join(dest_dir, "ch09.cpt"))
@@ -169,21 +155,13 @@ def build_default_family(dest_dir=None):
     # CH10: Lower WV (WV.cpt)
     shutil.copyfile(os.path.join(COLORS_DIR, "WV.cpt"), os.path.join(dest_dir, "ch10.cpt"))
 
-    # CH11: Cloud-Top Phase
-    ch11_pts = [
-        (-90.0, 250, 225, 255), (-70.0, 210, 150, 235), (-50.0, 120, 70, 160), (-30.0, 35, 105, 135),
-        (-10.0, 40, 145, 115), (10.0, 110, 150, 95), (30.0, 115, 115, 115), (50.0, 20, 20, 20)
-    ]
-    create_interpolated_cpt(ch11_pts, "ch11.cpt", target_dir=dest_dir)
+    # CH11: Cloud-Top Phase IR (IR4AVHRR6.cpt - Operational McIDAS Convective BD Curve)
+    shutil.copyfile(os.path.join(COLORS_DIR, "IR4AVHRR6.cpt"), os.path.join(dest_dir, "ch11.cpt"))
 
-    # CH12: Ozone
-    ch12_pts = [
-        (-90.0, 185, 25, 145), (-65.0, 30, 55, 175), (-40.0, 15, 125, 150), (-15.0, 25, 165, 95),
-        (10.0, 165, 155, 35), (30.0, 125, 65, 20), (50.0, 30, 30, 30)
-    ]
-    create_interpolated_cpt(ch12_pts, "ch12.cpt", target_dir=dest_dir)
+    # CH12: Ozone IR (IR4AVHRR6.cpt - Operational McIDAS Convective BD Curve)
+    shutil.copyfile(os.path.join(COLORS_DIR, "IR4AVHRR6.cpt"), os.path.join(dest_dir, "ch12.cpt"))
 
-    # CH13: Realce Oklahoma
+    # CH13: Realce Oklahoma (oklahoma.cpt)
     ok_pts = get_oklahoma_points()
     if ok_pts:
         create_interpolated_cpt(ok_pts, "ch13.cpt", target_dir=dest_dir)
@@ -191,22 +169,14 @@ def build_default_family(dest_dir=None):
     else:
         shutil.copyfile(os.path.join(COLORS_DIR, "thermal.cpt"), os.path.join(dest_dir, "ch13.cpt"))
 
-    # CH14: Traditional IR
+    # CH14: Traditional IR (IR4AVHRR6.cpt - Operational McIDAS Convective BD Curve)
     shutil.copyfile(os.path.join(COLORS_DIR, "IR4AVHRR6.cpt"), os.path.join(dest_dir, "ch14.cpt"))
 
-    # CH15: Dirty Longwave IR
-    ch15_pts = [
-        (-90.0, 245, 245, 255), (-60.0, 75, 95, 145), (-30.0, 125, 115, 90), (0.0, 185, 155, 95),
-        (25.0, 170, 120, 60), (50.0, 30, 25, 20)
-    ]
-    create_interpolated_cpt(ch15_pts, "ch15.cpt", target_dir=dest_dir)
+    # CH15: Dirty Longwave IR (IR4AVHRR6.cpt - Operational McIDAS Convective BD Curve)
+    shutil.copyfile(os.path.join(COLORS_DIR, "IR4AVHRR6.cpt"), os.path.join(dest_dir, "ch15.cpt"))
 
-    # CH16: CO2
-    ch16_pts = [
-        (-90.0, 145, 45, 165), (-65.0, 35, 115, 165), (-40.0, 30, 155, 140), (-15.0, 65, 165, 95),
-        (10.0, 175, 145, 45), (30.0, 95, 65, 45), (50.0, 25, 25, 25)
-    ]
-    create_interpolated_cpt(ch16_pts, "ch16.cpt", target_dir=dest_dir)
+    # CH16: CO2 (Inverted Thermal Grayscale by default, BD enhanced via --c16-enhanced)
+    create_interpolated_cpt(NOAA_STOPS_B16, "ch16.cpt", target_dir=dest_dir)
 
     # Also mirror into root colors directory for backward compatibility
     for band in range(1, 17):

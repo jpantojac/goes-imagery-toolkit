@@ -1058,7 +1058,7 @@ def resolve_colormap_and_limits(
         if band <= 6:
             clim_min, clim_max = 0.0, 1.0
         elif band == 7:
-            clim_min, clim_max = -112.15, 56.85
+            clim_min, clim_max = -90.0, 130.0
         elif 8 <= band <= 10:
             clim_min, clim_max = -85.0, -30.0
         else:
