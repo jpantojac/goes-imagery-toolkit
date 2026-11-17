@@ -348,7 +348,7 @@ docker compose up -d api
 docker compose up -d api web
 
 # Access points:
-# Web GIS Interface:  http://localhost:3000
+# Web GIS Interface:  http://localhost:3001
 # OpenAPI / Swagger:  http://localhost:8000/docs
 # Pipeline Generator: docker compose exec app python main.py [flags...]
 ```

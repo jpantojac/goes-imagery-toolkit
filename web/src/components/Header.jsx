@@ -2,6 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { Satellite, Info, Radio, Layers, Clock, Globe } from 'lucide-react';
 
 export default function Header({ 
+  channels = [],
+  currentChannel,
+  onSelectChannel,
   channelMeta, 
   coords, 
   currentFrame, 
@@ -25,32 +28,61 @@ export default function Header({
 
   return (
     <header className="h-14 bg-slate-900/95 border-b border-slate-800/80 px-4 flex items-center justify-between z-30 shadow-md backdrop-blur-sm">
-      {/* Left: Branding & Satellite Status */}
+      {/* Left: Branding & Direct Channel Dropdown */}
       <div className="flex items-center space-x-3">
         <button
           onClick={onToggleSidebar}
           className={`p-2 rounded-lg transition-colors ${
             sidebarOpen ? 'bg-sky-600/30 text-sky-400 border border-sky-500/40' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
           }`}
-          title="Alternar panel de capas"
+          title="Alternar panel de capas y opacidad"
         >
           <Layers className="w-4 h-4" />
         </button>
 
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center space-x-2.5">
           <div className="p-1.5 bg-gradient-to-tr from-sky-600 to-indigo-600 rounded-lg shadow-inner">
             <Satellite className="w-5 h-5 text-white" />
           </div>
-          <div>
+          <div className="flex flex-col">
             <div className="flex items-center space-x-2">
-              <span className="font-bold text-sm tracking-wide text-white uppercase">GOES Sat-Viewer</span>
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-950 text-sky-300 border border-sky-800/60 font-mono">
-                ABI L1b/L2
+              <span className="font-bold text-xs sm:text-sm tracking-wide text-white uppercase">GOES Sat-Viewer</span>
+              <span className="text-[10px] px-1.5 py-0.2 rounded bg-sky-950 text-sky-300 border border-sky-800/60 font-mono">
+                ABI
               </span>
             </div>
-            <p className="text-[11px] text-slate-400 font-medium leading-none">
-              {channelMeta ? `${channelMeta.channel} - ${channelMeta.name} (${channelMeta.wavelength_um} µm)` : 'Cargando canal...'}
-            </p>
+            
+            {/* Direct Channel Selector Dropdown */}
+            <div className="relative mt-0.5">
+              <select
+                value={currentChannel}
+                onChange={(e) => onSelectChannel(e.target.value)}
+                className="bg-slate-800 hover:bg-slate-750 text-sky-300 border border-slate-700 rounded px-2 py-0.5 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-sky-500 cursor-pointer max-w-[210px] sm:max-w-[280px] truncate"
+                title="Seleccionar canal espectral ABI"
+              >
+                <optgroup label="Visible & Near-IR (Reflectancia)">
+                  {channels.filter(c => ['C01','C02','C03','C04','C05','C06'].includes(c.channel)).map(c => (
+                    <option key={c.channel} value={c.channel}>
+                      {c.channel} - {c.name} ({c.wavelength_um} µm)
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="Vapor de Agua Troposférico">
+                  {channels.filter(c => ['C08','C09','C10'].includes(c.channel)).map(c => (
+                    <option key={c.channel} value={c.channel}>
+                      {c.channel} - {c.name} ({c.wavelength_um} µm)
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="Infrarrojo Térmico & Ventana">
+                  {channels.filter(c => ['C07','C11','C12','C13','C14','C15','C16'].includes(c.channel)).map(c => (
+                    <option key={c.channel} value={c.channel}>
+                      {c.channel} - {c.name} ({c.wavelength_um} µm)
+                    </option>
+                  ))}
+                </optgroup>
+              </select>
+            </div>
           </div>
         </div>
       </div>

@@ -6,6 +6,7 @@ import ColorLegend from './components/ColorLegend';
 import TimelineBar from './components/TimelineBar';
 import InfoModal from './components/InfoModal';
 import { 
+  DEFAULT_CHANNELS,
   fetchBounds, 
   fetchChannels, 
   fetchFrames, 
@@ -14,8 +15,8 @@ import {
 } from './services/apiClient';
 
 export default function App() {
-  // Application State
-  const [channels, setChannels] = useState([]);
+  // Application State - Pre-populated with default ABI channels
+  const [channels, setChannels] = useState(DEFAULT_CHANNELS);
   const [currentChannel, setCurrentChannel] = useState('C13');
   const [frameCount, setFrameCount] = useState(24);
   const [frames, setFrames] = useState([]);
@@ -24,6 +25,7 @@ export default function App() {
   const [fps, setFps] = useState(8);
   const [opacity, setOpacity] = useState(0.85);
   const [basemap, setBasemap] = useState('dark');
+  const [showBorders, setShowBorders] = useState(true);
   const [boundsMeta, setBoundsMeta] = useState(null);
   const [legend, setLegend] = useState(null);
   const [apiOnline, setApiOnline] = useState(false);
@@ -193,6 +195,9 @@ export default function App() {
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#0B0F19]">
       {/* Top Header */}
       <Header
+        channels={channels}
+        currentChannel={currentChannel}
+        onSelectChannel={setCurrentChannel}
         channelMeta={currentChannelMeta}
         coords={coords}
         currentFrame={currentFrame}
@@ -211,9 +216,66 @@ export default function App() {
           currentIndex={currentIndex}
           opacity={opacity}
           basemap={basemap}
+          showBorders={showBorders}
           onMouseMove={setCoords}
           onPreloadProgress={setPreloadedCount}
         />
+
+        {/* Floating Quick Map Controls (Opacity, Borders & Basemap) */}
+        <div className="absolute top-20 left-3 z-[1000] bg-slate-900/95 border border-slate-800 rounded-2xl p-3 shadow-2xl backdrop-blur-md flex flex-col space-y-2.5 text-xs w-56">
+          {/* Opacity Slider */}
+          <div className="flex items-center justify-between text-[11px] font-semibold text-slate-300">
+            <span>Opacidad Satélite</span>
+            <span className="font-mono text-sky-400 bg-sky-950/80 px-1.5 py-0.5 rounded border border-sky-800/50">
+              {Math.round(opacity * 100)}%
+            </span>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="1"
+            step="0.05"
+            value={opacity}
+            onChange={(e) => setOpacity(parseFloat(e.target.value))}
+            className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer"
+          />
+
+          {/* Quick Toggles: Borders & Basemaps */}
+          <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between">
+            <span className="text-[11px] text-slate-400 font-medium">Fronteras:</span>
+            <button
+              onClick={() => setShowBorders((prev) => !prev)}
+              className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-all border ${
+                showBorders
+                  ? 'bg-sky-600/30 text-sky-300 border-sky-500/60 shadow-sm'
+                  : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-slate-200'
+              }`}
+            >
+              {showBorders ? 'Visibles' : 'Ocultas'}
+            </button>
+          </div>
+
+          {/* Quick Basemap Switcher */}
+          <div className="pt-1 flex items-center justify-between space-x-1">
+            {[
+              { id: 'dark', label: 'Oscuro' },
+              { id: 'satellite', label: 'Satélite' },
+              { id: 'osm', label: 'Calles' }
+            ].map((b) => (
+              <button
+                key={b.id}
+                onClick={() => setBasemap(b.id)}
+                className={`flex-1 py-1 rounded text-[10px] font-medium transition-all ${
+                  basemap === b.id
+                    ? 'bg-sky-600 text-white font-semibold shadow-sm'
+                    : 'bg-slate-800/80 text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                }`}
+              >
+                {b.label}
+              </button>
+            ))}
+          </div>
+        </div>
 
         {/* Collapsible Layer & Channel Configuration Sidebar */}
         <ChannelSelector
@@ -226,6 +288,8 @@ export default function App() {
           onChangeOpacity={setOpacity}
           basemap={basemap}
           onChangeBasemap={setBasemap}
+          showBorders={showBorders}
+          onToggleBorders={setShowBorders}
           isOpen={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
         />

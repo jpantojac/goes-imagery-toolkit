@@ -4,9 +4,10 @@ Provides access to channels, available timestamps, frames for animation,
 and latest imagery metadata.
 """
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import os
 import re
+import struct
 from datetime import datetime, timezone
 from api.config import OUTPUT_DIR, LATEST_DIR, get_extent_bounds
 
@@ -194,25 +195,48 @@ def parse_timestamp_to_iso(ts_str: str) -> Optional[str]:
     return None
 
 
-def parse_pgw_bounds(pgw_path: Path, img_width: int = 2048, img_height: int = 2048) -> Optional[List[List[float]]]:
+def get_image_dimensions(img_path: Path) -> Tuple[int, int]:
+    """Reads PNG width and height in pixels from the IHDR header (bytes 16..24)."""
+    try:
+        with open(img_path, "rb") as f:
+            f.seek(16)
+            header_data = f.read(8)
+            if len(header_data) == 8:
+                w, h = struct.unpack(">II", header_data)
+                if w > 0 and h > 0:
+                    return w, h
+    except Exception:
+        pass
+    return 2048, 1802
+
+
+def parse_pgw_bounds(pgw_path: Path, companion_img: Optional[Path] = None) -> Optional[List[List[float]]]:
     """
-    Reads an ESRI Worldfile (.pgw) to compute [[south, west], [north, east]].
+    Reads an ESRI Worldfile (.pgw) to compute Leaflet LatLngBounds: [[south, west], [north, east]].
+    Dynamically determines image pixel dimensions from the companion .png file to prevent
+    vertical/horizontal geographic distortion.
     Format of worldfile:
-      Line 1: dx
+      Line 1: dx (pixel size in longitude degrees)
       Line 2: rot_y (0)
       Line 3: rot_x (0)
-      Line 4: dy (negative)
+      Line 4: dy (negative pixel size in latitude degrees)
       Line 5: top-left x center
       Line 6: top-left y center
     """
     if not pgw_path.is_file():
         return None
     try:
+        img_path = companion_img or pgw_path.with_suffix(".png")
+        if img_path.is_file():
+            img_width, img_height = get_image_dimensions(img_path)
+        else:
+            img_width, img_height = 2048, 1802
+
         with open(pgw_path, "r", encoding="utf-8") as f:
             lines = [float(line.strip()) for line in f if line.strip()]
         if len(lines) >= 6:
             dx = lines[0]
-            dy = lines[3]
+            dy = lines[3]  # Negative in equirectangular projection
             top_left_x = lines[4]
             top_left_y = lines[5]
             
@@ -220,6 +244,17 @@ def parse_pgw_bounds(pgw_path: Path, img_width: int = 2048, img_height: int = 20
             north = top_left_y - (dy / 2.0)
             east = west + (img_width * dx)
             south = north + (img_height * dy)
+
+            # Snap to canonical extent boundaries when within numerical epsilon
+            if abs(west - (-100.0)) < 0.1:
+                west = -100.0
+            if abs(east - (-50.0)) < 0.1:
+                east = -50.0
+            if abs(north - 30.0) < 0.1:
+                north = 30.0
+            if abs(south - (-14.0)) < 0.1:
+                south = -14.0
+
             return [[round(south, 4), round(west, 4)], [round(north, 4), round(east, 4)]]
     except Exception:
         pass
@@ -300,7 +335,7 @@ def get_latest_products() -> Dict[str, Any]:
             png_file = LATEST_DIR / f"latest{ch_key}.png"
             pgw_file = LATEST_DIR / f"latest{ch_key}.pgw"
             if png_file.is_file():
-                bounds = parse_pgw_bounds(pgw_file) or default_bounds
+                bounds = parse_pgw_bounds(pgw_file, png_file) or default_bounds
                 stat = png_file.stat()
                 mtime_iso = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                 latest_map[ch_key] = {
@@ -368,7 +403,7 @@ def get_frames_for_channel(
 
                 tif_path = ch_dir / f"{ts}.tif"
                 pgw_path = ch_dir / f"{ts}.pgw"
-                bounds = parse_pgw_bounds(pgw_path) or default_bounds
+                bounds = parse_pgw_bounds(pgw_path, png_path) or default_bounds
 
                 iso_utc = parse_timestamp_to_iso(ts)
                 raw_frames.append({

@@ -2,13 +2,15 @@ import React, { useState } from 'react';
 import { Sliders, Map, Eye, Flame, Droplets, CloudSun, EyeOff } from 'lucide-react';
 
 export default function ChannelSelector({
-  channels,
+  channels = [],
   currentChannel,
   onSelectChannel,
   opacity,
   onChangeOpacity,
   basemap,
   onChangeBasemap,
+  showBorders,
+  onToggleBorders,
   isOpen,
   onClose
 }) {
@@ -26,7 +28,7 @@ export default function ChannelSelector({
     activeTab === 'wv' ? waterVaporBands : infraredBands;
 
   return (
-    <aside className="absolute top-16 left-4 z-20 w-80 bg-slate-900/95 border border-slate-800 rounded-2xl shadow-2xl backdrop-blur-md flex flex-col max-h-[calc(100vh-140px)] overflow-hidden transition-all duration-200">
+    <aside className="absolute top-16 left-4 z-[1050] w-80 bg-slate-900/95 border border-slate-800 rounded-2xl shadow-2xl backdrop-blur-md flex flex-col max-h-[calc(100vh-140px)] overflow-hidden transition-all duration-200">
       {/* Panel Header */}
       <div className="p-4 border-b border-slate-800 flex items-center justify-between">
         <div className="flex items-center space-x-2">
@@ -62,6 +64,22 @@ export default function ChannelSelector({
             onChange={(e) => onChangeOpacity(parseFloat(e.target.value))}
             className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer"
           />
+        </div>
+
+        {/* Vector Overlays: Political Borders */}
+        <div className="space-y-2 pt-2 border-t border-slate-800">
+          <span className="text-xs font-semibold text-slate-300">
+            Capas Vectoriales
+          </span>
+          <label className="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/70 border border-slate-800 cursor-pointer hover:bg-slate-950">
+            <span className="text-xs text-slate-300">Fronteras y Límites Políticos</span>
+            <input
+              type="checkbox"
+              checked={showBorders}
+              onChange={(e) => onToggleBorders(e.target.checked)}
+              className="w-4 h-4 accent-sky-500 rounded cursor-pointer"
+            />
+          </label>
         </div>
 
         {/* Basemap Selection */}

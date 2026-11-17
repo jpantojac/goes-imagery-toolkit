@@ -4,7 +4,7 @@ export default function ColorLegend({ legend }) {
   if (!legend) return null;
 
   return (
-    <div className="absolute top-4 right-4 z-20 bg-slate-900/90 border border-slate-800/90 rounded-xl p-3 shadow-xl backdrop-blur-md max-w-xs text-xs">
+    <div className="absolute top-4 right-4 z-[1000] bg-slate-900/95 border border-slate-800 rounded-xl p-3 shadow-2xl backdrop-blur-md max-w-xs text-xs">
       <div className="flex items-center justify-between mb-1.5">
         <span className="font-semibold text-slate-200">
           Escala Calibrada ({legend.unit})

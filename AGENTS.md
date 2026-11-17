@@ -73,7 +73,7 @@ El repositorio cuenta con 3 componentes desacoplados que pueden ejecutarse de fo
 - **`api` (Backend REST)**: Servicio FastAPI que expone metadatos espaciales, catálogo de fechas, secuencias de animación en 60 FPS y streaming de imágenes con ETag en el puerto `8000` (`/docs` para Swagger UI).
   - Ejecución: `docker compose up -d api` o `python -m uvicorn api.main:app --port 8000`
   - Tests unitarios: `python -m pytest api/tests/`
-- **`web` (Visor Web GIS)**: Frontend Nginx + React + Leaflet que consume el API en el puerto `3000` (`http://localhost:3000`).
+- **`web` (Visor Web GIS)**: Frontend Nginx + React + Leaflet que consume el API en el puerto `3001` (`http://localhost:3001`).
   - Ejecución: `docker compose up -d web` o `cd web && npm run dev`
   - Build de producción: `cd web && npm run build` (genera en `web/dist/`)
 
