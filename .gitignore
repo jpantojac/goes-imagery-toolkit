@@ -48,3 +48,18 @@ ENV/
 *~
 .DS_Store
 Thumbs.db
+
+# ==========================================
+# Logs & Process Runtime Files
+# ==========================================
+*.log
+app/*.log
+*.lock
+# ==========================================
+node_modules/
+web/node_modules/
+dist/
+web/dist/
+.vite/
+web/.vite/
+
