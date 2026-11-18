@@ -5,18 +5,30 @@ import os
 import shutil
 import tempfile
 import unittest
+import sys
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch
 
-from app.libs.retention import (
-    parse_file_datetime,
-    get_disk_status,
-    purge_input_files,
-    purge_output_files,
-    emergency_disk_cleanup,
-    prune_empty_directories,
-    run_retention_cycle
-)
+TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(TESTS_DIR)
+APP_DIR = os.path.join(PROJECT_ROOT, "app")
+if APP_DIR not in sys.path:
+    sys.path.insert(0, APP_DIR)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+try:
+    import app.libs.retention as ret_mod
+except ImportError:
+    import libs.retention as ret_mod
+
+parse_file_datetime = ret_mod.parse_file_datetime
+get_disk_status = ret_mod.get_disk_status
+purge_input_files = ret_mod.purge_input_files
+purge_output_files = ret_mod.purge_output_files
+emergency_disk_cleanup = ret_mod.emergency_disk_cleanup
+prune_empty_directories = ret_mod.prune_empty_directories
+run_retention_cycle = ret_mod.run_retention_cycle
 
 
 class TestRetentionEngine(unittest.TestCase):
@@ -151,7 +163,7 @@ class TestRetentionEngine(unittest.TestCase):
         self.assertFalse(os.path.exists(empty_sub))
         self.assertTrue(os.path.exists(non_empty))
 
-    @patch("app.libs.retention.get_disk_status")
+    @patch.object(ret_mod, "get_disk_status")
     def test_emergency_disk_cleanup(self, mock_disk):
         # Mock high disk usage: 95% used, 2.0 GB free
         mock_disk.side_effect = [

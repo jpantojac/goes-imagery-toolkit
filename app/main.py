@@ -77,7 +77,7 @@ import argparse
 import logging   
 import ast
 import shutil
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 try:
     import GOES
 except (ImportError, ModuleNotFoundError):
@@ -652,6 +652,18 @@ if GOES is not None:
     except Exception as _hook_err:
         logging.debug(f"Could not hook GOES download_file: {_hook_err}")
 
+def _clear_s3fs_cache() -> None:
+    """
+    Clears internal singleton and directory listing caches in s3fs.
+    Crucial for long-running daemon execution to prevent stale directory listings
+    and ensure new 10-minute satellite scans on NOAA AWS S3 are immediately discovered.
+    """
+    try:
+        import s3fs
+        s3fs.S3FileSystem.clear_instance_cache()
+    except Exception as e:
+        logging.debug(f"Could not clear s3fs instance cache: {e}")
+
 def _download_channel_slot(
     ch: Union[str, int],
     date: str,
@@ -706,6 +718,7 @@ def _download_channel_slot(
         max_query_attempts = 3
         for attempt in range(1, max_query_attempts + 1):
             try:
+                _clear_s3fs_cache()
                 flist = GOES.download(
                     dsat,
                     'ABI-L1b-RadF',
@@ -717,13 +730,19 @@ def _download_channel_slot(
                 )
                 if flist:
                     break
+                elif attempt < max_query_attempts:
+                    logging.debug(
+                        f"[Attempt {attempt}/{max_query_attempts}] Scan {ch_str} ({date} {hour}:{minute}) "
+                        "not yet indexed on S3. Retrying in 10s..."
+                    )
+                    time.sleep(10.0)
             except FileNotFoundError as fnf_err:
                 logging.warning(f"S3 remote directory not found for channel {ch_str} ({date} {hour}:{minute} UTC): {fnf_err}")
                 break
             except Exception as dl_err:
                 if attempt < max_query_attempts:
                     logging.debug(f"[Retry {attempt}/{max_query_attempts}] Querying S3 for channel {ch_str}: {dl_err}")
-                    time.sleep(1.5)
+                    time.sleep(2.0)
                 else:
                     logging.warning(f"Error querying GOES data for channel {ch_str} ({date} {hour}:{minute} UTC): {dl_err}")
 
@@ -742,46 +761,63 @@ def _download_channel_slot(
     return []
 
 def _build_download_tasks(
-    dates: List[str],
-    hours: List[str],
-    minutes: List[str],
+    dates: Optional[List[str]] = None,
+    hours: Optional[List[str]] = None,
+    minutes: Optional[List[str]] = None,
     satellite_override: Optional[str] = None,
-    target_channels: Optional[List[str]] = None
+    target_channels: Optional[List[str]] = None,
+    slots: Optional[List[Tuple[str, str, str]]] = None
 ) -> List[tuple]:
     """
     Constructs the sequence of download task specifications for each channel and timestamp,
     dynamically resolving the operational satellite (G16 vs G19) for each target date.
 
+    Supports either explicit timestamp slots [(date, hour, minute), ...] or Cartesian
+    combination of dates x hours x minutes.
+
     Args:
-        dates (List[str]): List of observation dates in 'YYYYMMDD' format.
-        hours (List[str]): List of UTC hours in 'HH' format.
-        minutes (List[str]): List of UTC minutes in 'MM' format.
+        dates (Optional[List[str]]): List of observation dates in 'YYYYMMDD' format.
+        hours (Optional[List[str]]): List of UTC hours in 'HH' format.
+        minutes (Optional[List[str]]): List of UTC minutes in 'MM' format.
         satellite_override (Optional[str], optional): Explicit satellite identifier. Defaults to None.
         target_channels (Optional[List[str]], optional): Subset of spectral channels. Defaults to None.
+        slots (Optional[List[Tuple[str, str, str]]], optional): Explicit list of (date, hour, minute) tuples.
 
     Returns:
         List[tuple]: List of task parameter tuples (ch, date, hour, minute, dsat, output_dir).
     """
     tasks = []
     active_chs = target_channels if target_channels is not None else channels
-    for date in dates:
+
+    if slots:
+        for date, hour, minute in slots:
+            sat_code, dsat = resolve_satellite(date, satellite_override)
+            fecha_dt = datetime.strptime(date, "%Y%m%d")
+            fecha_juliana = fecha_dt.strftime("%j")
+            output = os.path.join(basePath, config['paths']['input'], fecha_juliana).rstrip(os.sep) + os.sep
+            for ch in active_chs:
+                tasks.append((ch, date, hour, minute, dsat, output))
+        return tasks
+
+    for date in (dates or []):
         sat_code, dsat = resolve_satellite(date, satellite_override)
         fecha_dt = datetime.strptime(date, "%Y%m%d")
         fecha_juliana = fecha_dt.strftime("%j")
         output = os.path.join(basePath, config['paths']['input'], fecha_juliana).rstrip(os.sep) + os.sep
-        for hour in hours:
-            for minute in minutes:
+        for hour in (hours or []):
+            for minute in (minutes or []):
                 for ch in active_chs:
                     tasks.append((ch, date, hour, minute, dsat, output))
     return tasks
 
 def download_and_pipeline(
-    dates: List[str],
-    hours: List[str],
-    minutes: List[str],
+    dates: Optional[List[str]] = None,
+    hours: Optional[List[str]] = None,
+    minutes: Optional[List[str]] = None,
     on_file_ready: Optional[Callable[[str], None]] = None,
     satellite: Optional[str] = None,
-    target_channels: Optional[List[str]] = None
+    target_channels: Optional[List[str]] = None,
+    slots: Optional[List[Tuple[str, str, str]]] = None
 ) -> List[str]:
     """
     Concurrent multi-threaded downloader with asynchronous producer-consumer pipelining.
@@ -792,12 +828,14 @@ def download_and_pipeline(
     and CPU image rendering overlap seamlessly.
 
     Args:
-        dates (List[str]): List of target observation dates in 'YYYYMMDD' format.
-        hours (List[str]): List of UTC target hours in 'HH' format (00-23).
-        minutes (List[str]): List of target minutes in 'MM' format (00-59).
+        dates (Optional[List[str]]): List of target observation dates in 'YYYYMMDD' format.
+        hours (Optional[List[str]]): List of UTC target hours in 'HH' format (00-23).
+        minutes (Optional[List[str]]): List of target minutes in 'MM' format (00-59).
         on_file_ready (Optional[Callable[[str], None]], optional): Callback executed as soon
             as an individual NetCDF file is ready on disk. Defaults to None.
         satellite (Optional[str], optional): Explicit satellite override (G16, G19, auto). Defaults to None.
+        target_channels (Optional[List[str]], optional): Target channel subset. Defaults to None.
+        slots (Optional[List[Tuple[str, str, str]]], optional): Explicit observation slots.
 
     Returns:
         List[str]: Complete list of all downloaded or resolved NetCDF file paths.
@@ -811,7 +849,14 @@ def download_and_pipeline(
     overlap_cfg = _cfg_get('performance', 'enable_pipeline_overlap', default=True)
     enable_overlap = bool(overlap_cfg) if overlap_cfg is not None else True
 
-    tasks = _build_download_tasks(dates, hours, minutes, satellite_override=satellite, target_channels=target_channels)
+    tasks = _build_download_tasks(
+        dates=dates,
+        hours=hours,
+        minutes=minutes,
+        satellite_override=satellite,
+        target_channels=target_channels,
+        slots=slots
+    )
     if not tasks:
         return []
 
@@ -847,11 +892,12 @@ def download_and_pipeline(
     return fulllist
 
 def download(
-    dates: List[str],
-    hours: List[str],
-    minutes: List[str],
+    dates: Optional[List[str]] = None,
+    hours: Optional[List[str]] = None,
+    minutes: Optional[List[str]] = None,
     satellite: Optional[str] = None,
-    target_channels: Optional[List[str]] = None
+    target_channels: Optional[List[str]] = None,
+    slots: Optional[List[Tuple[str, str, str]]] = None
 ) -> List[str]:
     """
     Retrieves NOAA GOES Level 1b Radiance (ABI-L1b-RadF) NetCDF files from AWS S3.
@@ -859,11 +905,12 @@ def download(
     Wrapper over download_and_pipeline maintaining backward compatibility for legacy callers.
 
     Args:
-        dates (List[str]): List of target observation dates in 'YYYYMMDD' format.
-        hours (List[str]): List of UTC target hours in 'HH' format (00-23).
-        minutes (List[str]): List of target minutes in 'MM' format (00-59).
+        dates (Optional[List[str]]): List of target observation dates in 'YYYYMMDD' format.
+        hours (Optional[List[str]]): List of UTC target hours in 'HH' format (00-23).
+        minutes (Optional[List[str]]): List of target minutes in 'MM' format (00-59).
         satellite (Optional[str], optional): Explicit satellite identifier (G16, G19, auto). Defaults to None.
         target_channels (Optional[List[str]], optional): Target channel subset. Defaults to None.
+        slots (Optional[List[Tuple[str, str, str]]], optional): Explicit observation slots.
 
     Returns:
         List[str]: List of filesystem paths to the downloaded or resolved NetCDF files.
@@ -873,6 +920,8 @@ def download(
         kwargs["satellite"] = satellite
     if target_channels is not None:
         kwargs["target_channels"] = target_channels
+    if slots is not None:
+        kwargs["slots"] = slots
     return download_and_pipeline(dates, hours, minutes, **kwargs)                
 
 def auto_date(
@@ -933,6 +982,7 @@ def run_daemon_loop(
     )
     while True:
         cycle_start = time.time()
+        _clear_s3fs_cache()
         logging.info("[Daemon Cycle] Starting scheduled observation download & processing...")
         try:
             if source == 'aws':
@@ -1110,13 +1160,15 @@ def source_AWS(
     borders: bool = True,
     max_dim: Optional[int] = None,
     satellite: Optional[str] = None,
-    target_channels: Optional[List[str]] = None
+    target_channels: Optional[List[str]] = None,
+    catchup_slots: int = 3
 ) -> None:
     """
-    Retrieves and processes the most recent GOES observation slot from NOAA's public AWS S3 bucket.
+    Retrieves and processes the most recent GOES observation slot(s) from NOAA AWS S3.
 
-    Computes the timestamp of the latest available 10-minute scan, creates required directories,
-    downloads the active spectral channels, and triggers image/raster production.
+    Features automated gap recovery (catch-up) across the last `catchup_slots` observations
+    (default: 3 slots / 30 minutes) to seamlessly retrieve and render any scans that were
+    previously missed due to temporary NOAA upload delays, network interruptions, or cache staleness.
 
     Args:
         label (bool, optional): If True, renders metadata, colorbar, and title banner. Defaults to False.
@@ -1127,45 +1179,71 @@ def source_AWS(
         max_dim (Optional[int], optional): Max pixel dimension or 0 for uncompressed native. Defaults to None.
         satellite (Optional[str], optional): Explicit satellite identifier (G16, G19, auto). Defaults to None.
         target_channels (Optional[List[str]], optional): Target channel subset. Defaults to None.
+        catchup_slots (int, optional): Number of recent 10-minute observation slots to check for missing
+            products. Defaults to 3 (30-minute lookback window).
     """
-    utc = time.gmtime()
-    tenMinutesAgo = time.time() - ( 60 * 10 )
-    utcTenMinutesAgo = time.gmtime(tenMinutesAgo)
-    current_minutes = utcTenMinutesAgo.tm_min
-    rounded_minutes = (current_minutes // 10) * 10
+    _clear_s3fs_cache()
 
-    utcTenMinutesAgoRounded = time.struct_time((utcTenMinutesAgo.tm_year,
-                                            utcTenMinutesAgo.tm_mon,
-                                            utcTenMinutesAgo.tm_mday,
-                                            utcTenMinutesAgo.tm_hour,
-                                            rounded_minutes,
-                                            0,  # Segundos a 0
-                                            utcTenMinutesAgo.tm_wday,
-                                            utcTenMinutesAgo.tm_yday,
-                                            utcTenMinutesAgo.tm_isdst))
+    active_chs = target_channels if target_channels is not None else channels
 
-    year = time.strftime('%Y',utcTenMinutesAgoRounded)
-    month = time.strftime('%m',utcTenMinutesAgoRounded) 
-    day = time.strftime('%d',utcTenMinutesAgoRounded)
-    hour = time.strftime('%H',utcTenMinutesAgoRounded)
-    minute = time.strftime('%M',utcTenMinutesAgoRounded)
-    julian = time.strftime('%j',utcTenMinutesAgoRounded) 
-    logging.info(time.strftime('%m/%d/%Y, %H:%M:%S',utcTenMinutesAgoRounded))
+    # Determine observation candidates.
+    # A full disk scan begins at :00, :10, :20, :30, :40, :50, taking ~10 minutes.
+    # NOAA processes and uploads files to S3 within ~2-3 minutes after scan completion.
+    # Thus, the latest available scan is approximately (now - 10 minutes) rounded down.
+    ref_dt = datetime.now(timezone.utc) - timedelta(minutes=10)
+    rounded_min = (ref_dt.minute // 10) * 10
+    base_slot_dt = ref_dt.replace(minute=rounded_min, second=0, microsecond=0)
 
-    dates=[]
-    hours=[]
-    minutes=[]
-    dates.append(year+month+day)
-    hours.append(hour)
-    minutes.append(minute)
-    prepare_folders(dates)
+    num_slots = max(1, catchup_slots)
+    candidate_slots = []
+    for i in range(num_slots):
+        slot_dt = base_slot_dt - timedelta(minutes=10 * i)
+        slot_date = slot_dt.strftime('%Y%m%d')
+        slot_hour = slot_dt.strftime('%H')
+        slot_min = slot_dt.strftime('%M')
+        slot_julian = slot_dt.strftime('%j')
+        candidate_slots.append((slot_date, slot_hour, slot_min, slot_julian, slot_dt))
+
+    # Reverse to process chronologically (oldest pending observation first)
+    candidate_slots.reverse()
+
+    # Determine pending slots where expected output PNGs do not yet exist
+    missing_slots: List[Tuple[str, str, str]] = []
+    for slot_date, slot_hour, slot_min, slot_julian, slot_dt in candidate_slots:
+        ts_str = f"{slot_date}{slot_hour}{slot_min}"
+        if overwrite:
+            missing_slots.append((slot_date, slot_hour, slot_min))
+            continue
+
+        slot_complete = True
+        for ch in active_chs:
+            ch_str = f"C{int(ch):02d}"
+            expected_png = os.path.join(basePath, config['paths']['output'], slot_julian, ch_str, f"{ts_str}.png")
+            if not os.path.exists(expected_png):
+                slot_complete = False
+                break
+
+        if not slot_complete:
+            missing_slots.append((slot_date, slot_hour, slot_min))
+
+    if not missing_slots:
+        logging.info("[Gap Recovery] All recent observation slots are already generated and up to date.")
+        return
+
+    logging.info(
+        f"[Gap Recovery] Processing {len(missing_slots)} observation slot(s): "
+        f"{', '.join(f'{d} {h}:{m} UTC' for d, h, m in missing_slots)}"
+    )
+
+    unique_dates = list({d for d, _, _ in missing_slots})
+    prepare_folders(unique_dates)
 
     overlap_cfg = _cfg_get('performance', 'enable_pipeline_overlap', default=True)
     enable_overlap = bool(overlap_cfg) if overlap_cfg is not None else True
 
     if enable_overlap:
         flist = download_and_pipeline(
-            dates, hours, minutes,
+            slots=missing_slots,
             on_file_ready=lambda f: processImage(
                 f, label=label, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim
             ),
@@ -1173,7 +1251,7 @@ def source_AWS(
             target_channels=target_channels
         )
     else:
-        flist = download(dates, hours, minutes, satellite=satellite, target_channels=target_channels)
+        flist = download_and_pipeline(slots=missing_slots, satellite=satellite, target_channels=target_channels)
         if flist:
             for aFile in flist:
                 processImage(aFile, label=label, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim)

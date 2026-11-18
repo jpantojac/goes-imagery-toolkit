@@ -267,17 +267,32 @@ python app/main.py --mode="auto" --source="aws" --channels=08,13 --daemon --inte
 
 #### Running the Daemon in the Background (Docker)
 
-To run the daemon detached in the background inside Docker:
+To run the daemon detached in the background inside Docker with log redirection:
 ```bash
-docker compose exec -d app python main.py \
-  --mode="auto" \
-  --source="aws" \
+docker compose exec -d app sh -c "python main.py \
+  --mode=\"auto\" \
+  --source=\"aws\" \
   --channels=08,13 \
   --daemon \
   --interval=10 \
   --label=true \
-  --borders=false
+  --borders=false > /app/daemon.log 2>&1"
 ```
+
+To monitor the daemon output in real time:
+```bash
+# In Git Bash on Windows, use //app/daemon.log to prevent path conversion:
+docker compose exec app tail -f //app/daemon.log
+
+# Or in Linux/macOS:
+docker compose exec app tail -f /app/daemon.log
+```
+
+#### Automated Gap Recovery & Self-Healing
+The pipeline features an automated observation gap recovery mechanism (`catchup_slots`):
+- On every observation cycle, the scheduler inspects the last 30 minutes (3 observation slots: $T-10\text{ min}$, $T-20\text{ min}$, $T-30\text{ min}$) against local rendered outputs.
+- If any scan was delayed by NOAA S3, or if the daemon was temporarily stopped, the pipeline automatically identifies the missing slots, queues them chronologically, and downloads and renders them in parallel with zero gaps.
+- In-memory `s3fs` directory caches are invalidated (`_clear_s3fs_cache()`) on every cycle to ensure intermediate 10-minute scans are queried live from NOAA AWS S3 without cache staleness.
 
 #### How to Stop or Modify a Running Daemon
 
@@ -294,14 +309,14 @@ docker compose exec -d app python main.py \
 >    ```
 > 2. **Launch the new daemon with your updated channel list**:
 >    ```bash
->    docker compose exec -d app python main.py \
->      --mode="auto" \
->      --source="aws" \
+>    docker compose exec -d app sh -c "python main.py \
+>      --mode=\"auto\" \
+>      --source=\"aws\" \
 >      --channels=08,13,14 \
 >      --daemon \
 >      --interval=10 \
 >      --label=true \
->      --borders=false
+>      --borders=false > /app/daemon.log 2>&1"
 >    ```
 
 #### Storage Retention & Disk Pruning Engine

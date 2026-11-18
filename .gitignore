@@ -50,7 +50,11 @@ ENV/
 Thumbs.db
 
 # ==========================================
-# Web & Frontend Build Artifacts
+# Logs & Process Runtime Files
+# ==========================================
+*.log
+app/*.log
+*.lock
 # ==========================================
 node_modules/
 web/node_modules/
