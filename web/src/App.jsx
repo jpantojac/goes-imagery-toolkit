@@ -34,6 +34,7 @@ export default function App() {
   const [coords, setCoords] = useState({ lat: null, lon: null });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
+  const [autoSync, setAutoSync] = useState(true);
 
   // Animation timing refs
   const animationFrameRef = useRef(null);
@@ -121,6 +122,42 @@ export default function App() {
     };
   }, [currentChannel, frameCount]);
 
+  // 3. Background Auto-Sync: Polls for new satellite frames every 30 seconds
+  useEffect(() => {
+    if (!autoSync) return;
+
+    const syncTimer = setInterval(async () => {
+      try {
+        const data = await fetchFrames(currentChannel, frameCount);
+        if (data?.frames && data.frames.length > 0) {
+          setFrames((prevFrames) => {
+            const prevLastTs = prevFrames.length > 0 ? prevFrames[prevFrames.length - 1].timestamp : null;
+            const newLastTs = data.frames[data.frames.length - 1].timestamp;
+
+            if (newLastTs && newLastTs !== prevLastTs) {
+              console.log(`[Auto-Sync] New observation detected: ${newLastTs} (${currentChannel})`);
+
+              // If currently parked at latest, advance to new latest
+              setCurrentIndex((prevIdx) => {
+                if (prevIdx >= prevFrames.length - 1) {
+                  return data.frames.length - 1;
+                }
+                return prevIdx;
+              });
+
+              return data.frames;
+            }
+            return prevFrames;
+          });
+        }
+      } catch (err) {
+        // Silently skip background poll failure
+      }
+    }, 30000); // 30s auto-refresh check
+
+    return () => clearInterval(syncTimer);
+  }, [currentChannel, frameCount, autoSync]);
+
   // 3. Smooth Delta-timed Animation Loop
   const animate = useCallback((now) => {
     if (!isPlayingRef.current) return;
@@ -202,6 +239,8 @@ export default function App() {
         coords={coords}
         currentFrame={currentFrame}
         apiOnline={apiOnline}
+        autoSync={autoSync}
+        onToggleAutoSync={() => setAutoSync((prev) => !prev)}
         onOpenInfo={() => setInfoOpen(true)}
         onToggleSidebar={() => setSidebarOpen((prev) => !prev)}
         sidebarOpen={sidebarOpen}

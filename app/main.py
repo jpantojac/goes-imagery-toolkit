@@ -197,6 +197,120 @@ def _cfg_get(section: str, *keys: str, default=None):
             return sec[k]
     return default
 
+import tempfile
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None
+
+class SingleInstanceLock:
+    """
+    Guarantees mutual exclusion across pipeline executions using kernel-level
+    file locking (flock on POSIX, msvcrt on Windows) to prevent overlapping
+    cron runs or concurrent worker conflicts.
+    """
+    def __init__(self, lockfile_path: Optional[str] = None):
+        if lockfile_path is None:
+            lockfile_path = os.path.join(tempfile.gettempdir(), "goes_pipeline_execution.lock")
+        self.lockfile_path = lockfile_path
+        self.fp = None
+
+    def acquire(self) -> bool:
+        try:
+            if fcntl is not None:
+                self.fp = open(self.lockfile_path, "w")
+                fcntl.flock(self.fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.fp.write(f"{os.getpid()}\n")
+                self.fp.flush()
+                return True
+            elif msvcrt is not None:
+                self.fp = open(self.lockfile_path, "r+") if os.path.exists(self.lockfile_path) else open(self.lockfile_path, "w+")
+                msvcrt.locking(self.fp.fileno(), msvcrt.LK_NBLCK, 1)
+                self.fp.seek(0)
+                self.fp.truncate()
+                self.fp.write(f"{os.getpid()}\n")
+                self.fp.flush()
+                return True
+            else:
+                self.fp = open(self.lockfile_path, "w")
+                self.fp.write(f"{os.getpid()}\n")
+                self.fp.flush()
+                return True
+        except (IOError, BlockingIOError, PermissionError, OSError):
+            if self.fp is not None:
+                try:
+                    self.fp.close()
+                except Exception:
+                    pass
+                self.fp = None
+            return False
+
+    def release(self) -> None:
+        if self.fp is not None:
+            try:
+                if fcntl is not None:
+                    fcntl.flock(self.fp.fileno(), fcntl.LOCK_UN)
+                elif msvcrt is not None:
+                    try:
+                        self.fp.seek(0)
+                        msvcrt.locking(self.fp.fileno(), msvcrt.LK_UNLCK, 1)
+                    except Exception:
+                        pass
+                self.fp.close()
+                if os.path.exists(self.lockfile_path):
+                    os.remove(self.lockfile_path)
+            except Exception:
+                pass
+            self.fp = None
+
+    @classmethod
+    def get_running_pid(cls, lockfile_path: Optional[str] = None) -> Optional[int]:
+        if lockfile_path is None:
+            lockfile_path = os.path.join(tempfile.gettempdir(), "goes_pipeline_execution.lock")
+        if os.path.exists(lockfile_path):
+            try:
+                with open(lockfile_path, "r") as f:
+                    content = f.read().strip()
+                    if content.isdigit():
+                        return int(content)
+            except Exception:
+                pass
+        return None
+
+    @classmethod
+    def stop_running_instance(cls, lockfile_path: Optional[str] = None) -> bool:
+        pid = cls.get_running_pid(lockfile_path)
+        if pid is not None and pid != os.getpid():
+            try:
+                import signal
+                os.kill(pid, signal.SIGTERM)
+                logging.info(f"Sent SIGTERM to running pipeline daemon (PID {pid}).")
+                time.sleep(0.5)
+                if lockfile_path is None:
+                    lockfile_path = os.path.join(tempfile.gettempdir(), "goes_pipeline_execution.lock")
+                if os.path.exists(lockfile_path):
+                    try:
+                        os.remove(lockfile_path)
+                    except Exception:
+                        pass
+                return True
+            except ProcessLookupError:
+                logging.info(f"Process {pid} was already terminated. Cleaned stale lock.")
+                if lockfile_path is None:
+                    lockfile_path = os.path.join(tempfile.gettempdir(), "goes_pipeline_execution.lock")
+                if os.path.exists(lockfile_path):
+                    os.remove(lockfile_path)
+                return True
+            except Exception as e:
+                logging.error(f"Could not stop process {pid}: {e}")
+                return False
+        return False
+
 # Configuraciones generales / General settings
 basePath = config.get('paths', {}).get('base', '')
 if not basePath or basePath.strip() in [".", ""]:
@@ -511,8 +625,8 @@ def _progress_download_file(
                 downloaded += len(chunk)
                 if total_size > 0:
                     pct = (downloaded / total_size) * 100.0
-                    milestone = int(pct // 20) * 20
-                    if milestone > last_milestone and milestone in (20, 40, 60, 80, 100):
+                    milestone = int(pct // 10) * 10
+                    if milestone > last_milestone and milestone in (10, 20, 30, 40, 50, 60, 70, 80, 90, 100):
                         filled = int(round(bar_width * downloaded / total_size))
                         bar_str = '=' * filled + (' ' * (bar_width - filled))
                         logging.info(
@@ -584,20 +698,29 @@ def _download_channel_slot(
     # 2. Query and download from NOAA S3 via GOES
     flist = []
     if GOES is not None:
-        try:
-            flist = GOES.download(
-                dsat,
-                'ABI-L1b-RadF',
-                DateTimeIni=f"{date}-{hour}{minute}00",
-                DateTimeFin=dateend,
-                channel=[ch_str],
-                path_out=output_dir,
-                show_download_progress=False
-            )
-        except FileNotFoundError as fnf_err:
-            logging.warning(f"S3 remote directory not found for channel {ch_str} ({date} {hour}:{minute} UTC): {fnf_err}")
-        except Exception as dl_err:
-            logging.warning(f"Error querying GOES data for channel {ch_str} ({date} {hour}:{minute} UTC): {dl_err}")
+        max_query_attempts = 3
+        for attempt in range(1, max_query_attempts + 1):
+            try:
+                flist = GOES.download(
+                    dsat,
+                    'ABI-L1b-RadF',
+                    DateTimeIni=f"{date}-{hour}{minute}00",
+                    DateTimeFin=dateend,
+                    channel=[ch_str],
+                    path_out=output_dir,
+                    show_download_progress=False
+                )
+                if flist:
+                    break
+            except FileNotFoundError as fnf_err:
+                logging.warning(f"S3 remote directory not found for channel {ch_str} ({date} {hour}:{minute} UTC): {fnf_err}")
+                break
+            except Exception as dl_err:
+                if attempt < max_query_attempts:
+                    logging.debug(f"[Retry {attempt}/{max_query_attempts}] Querying S3 for channel {ch_str}: {dl_err}")
+                    time.sleep(1.5)
+                else:
+                    logging.warning(f"Error querying GOES data for channel {ch_str} ({date} {hour}:{minute} UTC): {dl_err}")
 
     if flist:
         return flist
@@ -617,7 +740,8 @@ def _build_download_tasks(
     dates: List[str],
     hours: List[str],
     minutes: List[str],
-    satellite_override: Optional[str] = None
+    satellite_override: Optional[str] = None,
+    target_channels: Optional[List[str]] = None
 ) -> List[tuple]:
     """
     Constructs the sequence of download task specifications for each channel and timestamp,
@@ -628,11 +752,13 @@ def _build_download_tasks(
         hours (List[str]): List of UTC hours in 'HH' format.
         minutes (List[str]): List of UTC minutes in 'MM' format.
         satellite_override (Optional[str], optional): Explicit satellite identifier. Defaults to None.
+        target_channels (Optional[List[str]], optional): Subset of spectral channels. Defaults to None.
 
     Returns:
         List[tuple]: List of task parameter tuples (ch, date, hour, minute, dsat, output_dir).
     """
     tasks = []
+    active_chs = target_channels if target_channels is not None else channels
     for date in dates:
         sat_code, dsat = resolve_satellite(date, satellite_override)
         fecha_dt = datetime.strptime(date, "%Y%m%d")
@@ -640,7 +766,7 @@ def _build_download_tasks(
         output = os.path.join(basePath, config['paths']['input'], fecha_juliana).rstrip(os.sep) + os.sep
         for hour in hours:
             for minute in minutes:
-                for ch in channels:
+                for ch in active_chs:
                     tasks.append((ch, date, hour, minute, dsat, output))
     return tasks
 
@@ -649,7 +775,8 @@ def download_and_pipeline(
     hours: List[str],
     minutes: List[str],
     on_file_ready: Optional[Callable[[str], None]] = None,
-    satellite: Optional[str] = None
+    satellite: Optional[str] = None,
+    target_channels: Optional[List[str]] = None
 ) -> List[str]:
     """
     Concurrent multi-threaded downloader with asynchronous producer-consumer pipelining.
@@ -679,14 +806,15 @@ def download_and_pipeline(
     overlap_cfg = _cfg_get('performance', 'enable_pipeline_overlap', default=True)
     enable_overlap = bool(overlap_cfg) if overlap_cfg is not None else True
 
-    tasks = _build_download_tasks(dates, hours, minutes, satellite_override=satellite)
+    tasks = _build_download_tasks(dates, hours, minutes, satellite_override=satellite, target_channels=target_channels)
     if not tasks:
         return []
 
     fulllist = []
     pool_workers = min(max_workers, len(tasks))
+    active_chs_len = len(target_channels) if target_channels is not None else len(channels)
     logging.info(
-        f"Starting download of {len(tasks)} file(s) across {len(channels)} channel(s) "
+        f"Starting download of {len(tasks)} file(s) across {active_chs_len} channel(s) "
         f"with {pool_workers} concurrent worker(s) (overlap={enable_overlap})."
     )
 
@@ -717,7 +845,8 @@ def download(
     dates: List[str],
     hours: List[str],
     minutes: List[str],
-    satellite: Optional[str] = None
+    satellite: Optional[str] = None,
+    target_channels: Optional[List[str]] = None
 ) -> List[str]:
     """
     Retrieves NOAA GOES Level 1b Radiance (ABI-L1b-RadF) NetCDF files from AWS S3.
@@ -729,13 +858,17 @@ def download(
         hours (List[str]): List of UTC target hours in 'HH' format (00-23).
         minutes (List[str]): List of target minutes in 'MM' format (00-59).
         satellite (Optional[str], optional): Explicit satellite identifier (G16, G19, auto). Defaults to None.
+        target_channels (Optional[List[str]], optional): Target channel subset. Defaults to None.
 
     Returns:
         List[str]: List of filesystem paths to the downloaded or resolved NetCDF files.
     """
+    kwargs = {"on_file_ready": None}
     if satellite is not None:
-        return download_and_pipeline(dates, hours, minutes, on_file_ready=None, satellite=satellite)
-    return download_and_pipeline(dates, hours, minutes, on_file_ready=None)                
+        kwargs["satellite"] = satellite
+    if target_channels is not None:
+        kwargs["target_channels"] = target_channels
+    return download_and_pipeline(dates, hours, minutes, **kwargs)                
 
 def auto_date(
     source: str,
@@ -745,7 +878,8 @@ def auto_date(
     family: Optional[str] = None,
     borders: bool = True,
     max_dim: Optional[int] = None,
-    satellite: Optional[str] = None
+    satellite: Optional[str] = None,
+    target_channels: Optional[List[str]] = None
 ) -> None:
     """
     Executes near-real-time automated observation retrieval and product generation.
@@ -759,14 +893,81 @@ def auto_date(
         borders (bool, optional): If True, draws administrative borders / croquis. Defaults to True.
         max_dim (Optional[int], optional): Max pixel dimension or 0 for uncompressed native. Defaults to None.
         satellite (Optional[str], optional): Explicit satellite override (G16, G19, auto). Defaults to None.
+        target_channels (Optional[List[str]], optional): Target channel subset. Defaults to None.
     """
     logging.info("Automated generation mode started")
     if source == 'aws':
-        source_AWS(label, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim, satellite=satellite)
+        source_AWS(label, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim, satellite=satellite, target_channels=target_channels)
     elif source == "ideam":
         source_IDEAM(label, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim)
     else:
         logging.error(f"Unknown data source: {source}. Supported: aws | ideam")
+
+def run_daemon_loop(
+    source: str,
+    interval_minutes: int = 10,
+    label: bool = False,
+    watermark: Optional[str] = None,
+    overwrite: bool = False,
+    family: Optional[str] = None,
+    borders: bool = True,
+    max_dim: Optional[int] = None,
+    satellite: Optional[str] = None,
+    target_channels: Optional[List[str]] = None
+) -> None:
+    """
+    Runs a continuous, non-overlapping automation daemon loop.
+    Executes sequentially on every observation interval, calculating the exact wait time
+    until the next NOAA satellite scan is published.
+    """
+    logging.info(
+        f"[Daemon Started] Running automated observation scheduler every {interval_minutes}m "
+        f"(source: {source}, channels: {target_channels or 'configured'})."
+    )
+    while True:
+        cycle_start = time.time()
+        logging.info("[Daemon Cycle] Starting scheduled observation download & processing...")
+        try:
+            if source == 'aws':
+                source_AWS(
+                    label=label,
+                    watermark=watermark,
+                    overwrite=overwrite,
+                    family=family,
+                    borders=borders,
+                    max_dim=max_dim,
+                    satellite=satellite,
+                    target_channels=target_channels
+                )
+            elif source == 'ideam':
+                source_IDEAM(
+                    label=label,
+                    watermark=watermark,
+                    overwrite=overwrite,
+                    family=family,
+                    borders=borders,
+                    max_dim=max_dim
+                )
+        except Exception as e:
+            logging.error(f"[Daemon Cycle Error] Exception during generation: {e}")
+
+        # NOAA publishes Full Disk scans ~2-3 min after scan start.
+        now = time.time()
+        sec_in_block = now % (interval_minutes * 60)
+        # Target :03, :13, :23, :33, :43, :53 UTC
+        delay = (interval_minutes * 60) - sec_in_block + 180
+        if delay > (interval_minutes * 60):
+            delay -= (interval_minutes * 60)
+        if delay < 30:
+            delay += (interval_minutes * 60)
+
+        next_run_dt = datetime.now() + timedelta(seconds=delay)
+        elapsed = time.time() - cycle_start
+        logging.info(
+            f"[Daemon Cycle Done] Execution took {elapsed:.1f}s. "
+            f"Sleeping {delay:.0f}s until next satellite slot ({next_run_dt.strftime('%H:%M:%S')})..."
+        )
+        time.sleep(delay)
 
 def download_file(url: str, nombre_archivo: str) -> None:
     """
@@ -889,7 +1090,8 @@ def source_AWS(
     family: Optional[str] = None,
     borders: bool = True,
     max_dim: Optional[int] = None,
-    satellite: Optional[str] = None
+    satellite: Optional[str] = None,
+    target_channels: Optional[List[str]] = None
 ) -> None:
     """
     Retrieves and processes the most recent GOES observation slot from NOAA's public AWS S3 bucket.
@@ -905,6 +1107,7 @@ def source_AWS(
         borders (bool, optional): If True, draws administrative borders / croquis. Defaults to True.
         max_dim (Optional[int], optional): Max pixel dimension or 0 for uncompressed native. Defaults to None.
         satellite (Optional[str], optional): Explicit satellite identifier (G16, G19, auto). Defaults to None.
+        target_channels (Optional[List[str]], optional): Target channel subset. Defaults to None.
     """
     utc = time.gmtime()
     tenMinutesAgo = time.time() - ( 60 * 10 )
@@ -947,10 +1150,11 @@ def source_AWS(
             on_file_ready=lambda f: processImage(
                 f, label=label, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim
             ),
-            satellite=satellite
+            satellite=satellite,
+            target_channels=target_channels
         )
     else:
-        flist = download(dates, hours, minutes, satellite=satellite)
+        flist = download(dates, hours, minutes, satellite=satellite, target_channels=target_channels)
         if flist:
             for aFile in flist:
                 processImage(aFile, label=label, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim)
@@ -972,7 +1176,8 @@ def manual_date(
     family: Optional[str] = None,
     borders: bool = True,
     max_dim: Optional[int] = None,
-    satellite: Optional[str] = None
+    satellite: Optional[str] = None,
+    target_channels: Optional[List[str]] = None
 ) -> None:
     """
     Orchestrates manual, targeted satellite imagery generation for specific timestamps and coordinates.
@@ -992,6 +1197,7 @@ def manual_date(
         borders (bool, optional): If True, draws administrative borders / croquis. Defaults to True.
         max_dim (Optional[int], optional): Max pixel dimension or 0 for uncompressed native. Defaults to None.
         satellite (Optional[str], optional): Explicit satellite identifier (G16, G19, auto). Defaults to None.
+        target_channels (Optional[List[str]], optional): Target channel subset. Defaults to None.
     """
     prepare_folders(dates)
 
@@ -1004,10 +1210,11 @@ def manual_date(
             on_file_ready=lambda f: processImage(
                 f, lat=lat, lon=lon, label=label, bullseye=bullseye, watermark=watermark, overwrite=overwrite, family=family, borders=borders, max_dim=max_dim
             ),
-            satellite=satellite
+            satellite=satellite,
+            target_channels=target_channels
         )
     else:
-        flist = download(dates, hours, minutes, satellite=satellite)
+        flist = download(dates, hours, minutes, satellite=satellite, target_channels=target_channels)
         if flist:
             for aFile in flist:
                 processImage(
@@ -1733,15 +1940,17 @@ def build_parser() -> argparse.ArgumentParser:
         '--mode', '--tipo',
         dest='mode',
         type=str,
-        required=True,
+        required=False,
+        default=None,
         help='Execution mode: auto | manual'
     )
     parser.add_argument(
         '--source', '--fuente',
         dest='source',
         type=str,
-        required=True,
-        help='Data source: aws | ideam'
+        required=False,
+        default='aws',
+        help='Data source: aws | ideam (default: aws)'
     )
     parser.add_argument(
         '--date', '--dates', '--fecha',
@@ -1836,6 +2045,34 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help='Target GOES satellite (G16, G19, or auto). Defaults to auto (G16 before April 7, 2025, G19 after).'
     )
+    parser.add_argument(
+        '--channels', '--canales',
+        dest='channels',
+        type=str,
+        default=None,
+        help='Target ABI channel(s) comma-separated (e.g. 02,08,13 or C02,C08,C13). Defaults to configured channels in config.yaml.'
+    )
+    parser.add_argument(
+        '--daemon',
+        dest='daemon',
+        action='store_true',
+        default=False,
+        help='Run in persistent daemon mode, executing observation cycles every N minutes without termination.'
+    )
+    parser.add_argument(
+        '--interval', '--intervalo',
+        dest='interval',
+        type=int,
+        default=10,
+        help='Cadence interval in minutes for daemon mode (default: 10).'
+    )
+    parser.add_argument(
+        '--stop',
+        dest='stop',
+        action='store_true',
+        default=False,
+        help='Stop any active background pipeline daemon or process using the lockfile PID.'
+    )
     return parser
 
 def main(argv: Optional[List[str]] = None) -> None:
@@ -1853,112 +2090,161 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    if args.stop:
+        stopped = SingleInstanceLock.stop_running_instance()
+        if stopped:
+            logging.info("Pipeline daemon successfully stopped.")
+            sys.exit(0)
+        else:
+            logging.warning("No active pipeline daemon was found running.")
+            sys.exit(0)
+
+    if not args.mode:
+        logging.error("Execution mode (--mode or --tipo) is required. Use: auto | manual (or pass --stop to terminate a daemon)")
+        parser.print_help()
+        sys.exit(1)
+
     logging.info("Execution mode: %s", args.mode)
 
-    if args.mode == "manual":
-        if args.date is None:
-            logging.error('Manual mode requires the --date (or --fecha) parameter (e.g. --date=20240929)')
-            parser.print_help()
+    target_channels = None
+    if args.channels:
+        try:
+            target_channels = [f"{int(c.strip().lstrip('cC')):02d}" for c in args.channels.split(',') if c.strip()]
+        except ValueError:
+            logging.error("Invalid channel format in --channels. Must be numbers like 02,08,13 or C02,C08,C13.")
             sys.exit(1)
-        elif args.hours is None:
-            logging.error('Manual mode requires the --hours (or --horas) parameter (e.g. --hours=11,12)')
-            parser.print_help()
-            sys.exit(1)
-        elif args.minutes is None:
-            logging.error('Manual mode requires the --minutes (or --minutos) parameter (e.g. --minutes=00,30)')
-            parser.print_help()
-            sys.exit(1)
-        else:
-            # Validar lista de fechas
-            dates = [d.strip() for d in args.date.split(',')]
-            validated_dates = [d for d in map(validate_date, dates) if d is not None]
-            if len(validated_dates) < len(dates):
-                logging.error("One or more dates are invalid. Please use YYYYMMDD format.")
-                sys.exit(1)
 
-            # Validar horas
-            hours = [h.strip() for h in args.hours.split(',')]
-            validated_hours = [h for h in map(validate_time, hours) if h is not None]
-            if len(validated_hours) < len(hours):
-                logging.error("One or more hours are invalid. Must be 2-digit numbers (00-23).")
-                sys.exit(1)
-
-            # Validar minutos
-            minutes = [m.strip() for m in args.minutes.split(',')]
-            validated_minutes = [m for m in map(validate_time, minutes) if m is not None]
-            if len(validated_minutes) < len(minutes):
-                logging.error("One or more minutes are invalid. Must be 2-digit numbers (00-59).")
-                sys.exit(1)
-
-            # Procesar latitud y longitud
-            lats = []
-            lons = []
-            
-            if args.lat is not None:
-                try:
-                    lats = [float(x.strip()) for x in args.lat.split(',')]
-                    validated_lats = [validate_lat(l) for l in lats]
-                    if None in validated_lats:
-                        logging.error("One or more latitudes are invalid. Must be between -90 and 90.")
-                        sys.exit(1)
-                    lats = validated_lats
-                except ValueError:
-                    logging.error("Invalid latitude format. Must be a number or comma-separated numbers.")
-                    sys.exit(1)
-
-            if args.lon is not None:
-                try:
-                    lons = [float(x.strip()) for x in args.lon.split(',')]
-                    validated_lons = [validate_lon(l) for l in lons]
-                    if None in validated_lons:
-                        logging.error("One or more longitudes are invalid. Must be between -180 and 180.")
-                        sys.exit(1)
-                    lons = validated_lons
-                except ValueError:
-                    logging.error("Invalid longitude format. Must be a number or comma-separated numbers.")
-                    sys.exit(1)
-
-            # Verificar que tengan la misma longitud si ambos están presentes
-            if lats and lons and len(lats) != len(lons):
-                logging.error("Latitude and longitude counts must match.")
-                sys.exit(1)
-
-            final_lat = lats if lats else None
-            final_lon = lons if lons else None
-
-            # Continuar con proceso manual
-            manual_date(
-                validated_dates,
-                validated_hours,
-                validated_minutes,
-                final_lat,
-                final_lon,
-                args.label,
-                args.bullseye,
-                watermark=args.watermark,
-                overwrite=args.overwrite,
-                family=args.family,
-                borders=args.borders,
-                max_dim=args.max_dim,
-                satellite=args.satellite
-            )
-
-    elif args.mode == "auto":
-        auto_date(
-            args.source,
-            args.label,
-            watermark=args.watermark,
-            overwrite=args.overwrite,
-            family=args.family,
-            borders=args.borders,
-            max_dim=args.max_dim,
-            satellite=args.satellite
+    lock = SingleInstanceLock()
+    if not lock.acquire():
+        logging.warning(
+            "[Overlap Prevention] Another instance of the pipeline is currently running. "
+            "Exiting gracefully to prevent duplicate downloads and resource contention."
         )
+        sys.exit(0)
 
-    else:
-        logging.error('Unknown execution mode: %s. Use: manual | auto', args.mode)
-        parser.print_help()
-        sys.exit(1)    
+    try:
+        if args.mode == "manual":
+            if args.date is None:
+                logging.error('Manual mode requires the --date (or --fecha) parameter (e.g. --date=20240929)')
+                parser.print_help()
+                sys.exit(1)
+            elif args.hours is None:
+                logging.error('Manual mode requires the --hours (or --horas) parameter (e.g. --hours=11,12)')
+                parser.print_help()
+                sys.exit(1)
+            elif args.minutes is None:
+                logging.error('Manual mode requires the --minutes (or --minutos) parameter (e.g. --minutes=00,30)')
+                parser.print_help()
+                sys.exit(1)
+            else:
+                # Validar lista de fechas
+                dates = [d.strip() for d in args.date.split(',')]
+                validated_dates = [d for d in map(validate_date, dates) if d is not None]
+                if len(validated_dates) < len(dates):
+                    logging.error("One or more dates are invalid. Please use YYYYMMDD format.")
+                    sys.exit(1)
+
+                # Validar horas
+                hours = [h.strip() for h in args.hours.split(',')]
+                validated_hours = [h for h in map(validate_time, hours) if h is not None]
+                if len(validated_hours) < len(hours):
+                    logging.error("One or more hours are invalid. Must be 2-digit numbers (00-23).")
+                    sys.exit(1)
+
+                # Validar minutos
+                minutes = [m.strip() for m in args.minutes.split(',')]
+                validated_minutes = [m for m in map(validate_time, minutes) if m is not None]
+                if len(validated_minutes) < len(minutes):
+                    logging.error("One or more minutes are invalid. Must be 2-digit numbers (00-59).")
+                    sys.exit(1)
+
+                # Procesar latitud y longitud
+                lats = []
+                lons = []
+                
+                if args.lat is not None:
+                    try:
+                        lats = [float(x.strip()) for x in args.lat.split(',')]
+                        validated_lats = [validate_lat(l) for l in lats]
+                        if None in validated_lats:
+                            logging.error("One or more latitudes are invalid. Must be between -90 and 90.")
+                            sys.exit(1)
+                        lats = validated_lats
+                    except ValueError:
+                        logging.error("Invalid latitude format. Must be a number or comma-separated numbers.")
+                        sys.exit(1)
+
+                if args.lon is not None:
+                    try:
+                        lons = [float(x.strip()) for x in args.lon.split(',')]
+                        validated_lons = [validate_lon(l) for l in lons]
+                        if None in validated_lons:
+                            logging.error("One or more longitudes are invalid. Must be between -180 and 180.")
+                            sys.exit(1)
+                        lons = validated_lons
+                    except ValueError:
+                        logging.error("Invalid longitude format. Must be a number or comma-separated numbers.")
+                        sys.exit(1)
+
+                # Verificar que tengan la misma longitud si ambos están presentes
+                if lats and lons and len(lats) != len(lons):
+                    logging.error("Latitude and longitude counts must match.")
+                    sys.exit(1)
+
+                final_lat = lats if lats else None
+                final_lon = lons if lons else None
+
+                # Continuar con proceso manual
+                manual_date(
+                    validated_dates,
+                    validated_hours,
+                    validated_minutes,
+                    final_lat,
+                    final_lon,
+                    args.label,
+                    args.bullseye,
+                    watermark=args.watermark,
+                    overwrite=args.overwrite,
+                    family=args.family,
+                    borders=args.borders,
+                    max_dim=args.max_dim,
+                    satellite=args.satellite,
+                    target_channels=target_channels
+                )
+
+        elif args.mode == "auto":
+            if args.daemon:
+                run_daemon_loop(
+                    args.source,
+                    interval_minutes=args.interval,
+                    label=args.label,
+                    watermark=args.watermark,
+                    overwrite=args.overwrite,
+                    family=args.family,
+                    borders=args.borders,
+                    max_dim=args.max_dim,
+                    satellite=args.satellite,
+                    target_channels=target_channels
+                )
+            else:
+                auto_date(
+                    args.source,
+                    args.label,
+                    watermark=args.watermark,
+                    overwrite=args.overwrite,
+                    family=args.family,
+                    borders=args.borders,
+                    max_dim=args.max_dim,
+                    satellite=args.satellite,
+                    target_channels=target_channels
+                )
+
+        else:
+            logging.error('Unknown execution mode: %s. Use: manual | auto', args.mode)
+            parser.print_help()
+            sys.exit(1)
+    finally:
+        lock.release()    
 # Punto de entrada del script
 if __name__ == "__main__":
     main()

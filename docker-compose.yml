@@ -9,6 +9,9 @@ services:
       dockerfile: Dockerfile
     image: goes-imagery-toolkit:latest
     container_name: goes-toolkit
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     volumes:
       - ./app:/app
       - ./tests:/app/tests:ro

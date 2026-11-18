@@ -60,6 +60,10 @@ python app/main.py \
 | `--borders` | `--croquis` | Dibuja los límites político-administrativos (países y departamentos / croquis) (`true`/`false`) | `--croquis=false` |
 | `--max-dim` | `--resolution-px` | Dimensión máxima de la imagen en píxeles (ej. `2048`, `4096`, o `0` para resolución nativa sin compresión) | `--max-dim=2048` |
 | `--satellite` | `--sat` | Satélite objetivo (`"G16"`, `"G19"`, o `"auto"`). Por defecto `"auto"` detecta automáticamente según la fecha | `--satellite="G16"` |
+| `--channels` | `--canales` | Canales ABI específicos a descargar/procesar (separados por coma, ej. `02,08,13` o `C13`). Por defecto descarga todos los configurados | `--channels=02,08,13` |
+| `--daemon` | | Modo daemon continuo: ejecuta la generación periódicamente en bucle infinito cada N minutos | `--daemon` |
+| `--interval` | `--intervalo` | Cadencia en minutos para el modo daemon (por defecto `10`) | `--interval=10` |
+| `--stop` | | Detiene cualquier daemon o proceso en ejecución activa en segundo plano mediante su lockfile | `--stop` |
 
 ## 4. Directrices Finales para el Agente
 - **Códigos ICAO / Topónimos**: Siempre que el usuario provea una ciudad, departamento o código ICAO (ej. SKCG, SKBO, etc.), es tu responsabilidad como Agente traducir ese identificador a sus coordenadas reales para los parámetros `--lat` y `--lon`.

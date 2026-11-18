@@ -253,19 +253,83 @@ python app/main.py \
   --max-dim=4096
 ```
 
-### 2. Automated Mode (Near Real-Time)
+### 2. Automated Mode (Near Real-Time & Continuous Daemon)
 
 Download and generate products for the most recent observation from the NOAA public S3 bucket:
+
 ```bash
-python app/main.py --mode="auto" --source="aws" --label=true
+# Single execution for the latest observation slot:
+python app/main.py --mode="auto" --source="aws" --channels=08,13 --label=true
+
+# Continuous non-overlapping daemon (runs every 10 minutes synchronized to NOAA satellite scans):
+python app/main.py --mode="auto" --source="aws" --channels=08,13 --daemon --interval=10 --label=true
+```
+
+#### Running the Daemon in the Background (Docker)
+
+To run the daemon detached in the background inside Docker:
+```bash
+docker compose exec -d app python main.py \
+  --mode="auto" \
+  --source="aws" \
+  --channels=08,13 \
+  --daemon \
+  --interval=10 \
+  --label=true \
+  --borders=false
+```
+
+#### How to Stop or Modify a Running Daemon
+
+> [!IMPORTANT]
+> **Daemon Replacement Rule & Mutual Exclusion**:
+> Because the pipeline is protected by `SingleInstanceLock` to prevent overlapping runs and resource contention, launching a new daemon command while one is already active will be **safely rejected**.
+>
+> If you want to change parameters (for example, adding a third channel like `14`):
+> 1. **Stop the active daemon**:
+>    ```bash
+>    docker compose exec app python main.py --stop
+>    # Or alternatively restart the container:
+>    docker compose restart app
+>    ```
+> 2. **Launch the new daemon with your updated channel list**:
+>    ```bash
+>    docker compose exec -d app python main.py \
+>      --mode="auto" \
+>      --source="aws" \
+>      --channels=08,13,14 \
+>      --daemon \
+>      --interval=10 \
+>      --label=true \
+>      --borders=false
+>    ```
+
+#### Overlap Prevention & Latency Protection (`SingleInstanceLock`)
+
+When satellite imagery is generated on a recurring schedule (either via `--daemon` or system `crontab`), unexpected network latency might cause a download to take longer than the standard 10-minute cadence.
+
+`main.py` implements a kernel-level lockfile (`SingleInstanceLock`) utilizing non-blocking file locking (`flock` on POSIX/Linux, `msvcrt` on Windows):
+- If the previous cycle is still ingesting or remapping when the next trigger occurs, the incoming run detects the active process PID, logs an overlap warning, and **exits immediately without blocking or consuming bandwidth**.
+- Once the active cycle finishes, the lock is freed and subsequent cycles resume as normal.
+
+#### Alternative: System Cron Automation (`crontab`)
+
+If you prefer external scheduling over daemon mode, configure a standard Linux `crontab` entry on your host or server:
+```bash
+# Run every 10 minutes (at minute :05, :15, :25, :35, :45, :55 UTC)
+*/10 * * * * cd /path/to/satellite-analisys && docker compose exec -T app python main.py --mode="auto" --source="aws" --channels=08,13 --label=true >> /var/log/goes_cron.log 2>&1
 ```
 
 ### 3. CLI Argument Reference
 
 | Argument (English) | Alias (Spanish) | Type | Default | Description |
 |:---|:---|:---:|:---:|:---|
-| `--mode` | `--tipo` | `str` | *Required* | Execution mode: `manual` or `auto`. |
-| `--source` | `--fuente` | `str` | *Required* | Ingestion source: `aws` (NOAA S3 bucket) or `ideam`. |
+| `--mode` | `--tipo` | `str` | *None* | Execution mode: `manual` or `auto` (not required when using `--stop`). |
+| `--source` | `--fuente` | `str` | `aws` | Ingestion source: `aws` (NOAA S3 bucket) or `ideam`. |
+| `--channels` | `--canales` | `str` | *Configured* | Comma-separated ABI channels to process (e.g. `02,08,13` or `C13`). Defaults to all channels configured in `config.yaml`. |
+| `--daemon` | | `flag` | `False` | Run in persistent daemon mode, executing observation cycles every N minutes without termination. |
+| `--interval` | `--intervalo` | `int` | `10` | Cadence interval in minutes for daemon mode (default: 10). |
+| `--stop` | | `flag` | `False` | Stop any active background pipeline daemon or process using the lockfile PID. |
 | `--date` | `--fecha`, `--dates` | `str` | `None` | Date in `YYYYMMDD` format (comma-separated for multiple dates). |
 | `--hours` | `--horas` | `str` | `None` | UTC hours in `HH` format (comma-separated, e.g. `00,06,12`). |
 | `--minutes` | `--minutos` | `str` | `None` | Minutes in `MM` format (comma-separated, e.g. `00,30`). |
@@ -312,6 +376,7 @@ The toolkit includes an enterprise-grade, microservices-based web visualization 
 
 ### 1. High-Performance Web GIS (`goes-web`)
 * **60 FPS Fluid Temporal Animations**: Utilizes double-buffering preloaded Leaflet overlays, eliminating raster reload flicker and browser memory spikes.
+* **Live Background Ingestion Detection (`🟢 En Vivo`)**: Automatic background polling (every 30s) detects newly produced frames from the daemon/cron pipeline in real-time, appends them seamlessly into the active animation buffer, and advances the view without requiring a full page refresh.
 * **Spectral Band Selector**: Intuitive grouped switching across Visible (C01–C02), Near-IR (C03–C06), Water Vapor (C08–C10), and Longwave Thermal IR (C07, C11–C16).
 * **Transparency & Opacity Control**: Real-time 0% to 100% opacity slider to blend satellite imagery with underlying terrain or base cartography.
 * **Calibrated Meteorological Colorbar**: Dynamically displays the active channel's temperature (°C) or reflectance (%) scale and physical limits.

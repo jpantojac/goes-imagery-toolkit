@@ -9,6 +9,8 @@ export default function Header({
   coords, 
   currentFrame, 
   apiOnline, 
+  autoSync = true,
+  onToggleAutoSync,
   onOpenInfo,
   onToggleSidebar,
   sidebarOpen
@@ -109,6 +111,20 @@ export default function Header({
               : 'Mover cursor en mapa'}
           </span>
         </div>
+
+        {/* Live Auto-Sync Pill */}
+        <button
+          onClick={onToggleAutoSync}
+          className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border transition-all ${
+            autoSync
+              ? 'bg-sky-950/40 text-sky-300 border-sky-800/50 hover:bg-sky-900/50'
+              : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-slate-200'
+          }`}
+          title={autoSync ? 'Sincronización automática activa (cada 30s). Clic para pausar.' : 'Sincronización pausada. Clic para activar.'}
+        >
+          <span className={`w-2 h-2 rounded-full ${autoSync ? 'bg-sky-400 animate-pulse' : 'bg-slate-500'}`} />
+          <span className="hidden sm:inline">{autoSync ? 'En Vivo' : 'Pausado'}</span>
+        </button>
 
         {/* API Status Pill */}
         <div 
