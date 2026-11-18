@@ -199,6 +199,39 @@ class TestDownloadConcurrency(unittest.TestCase):
                     main.processImage(filename, overwrite=True)
 
 
+    def test_clear_s3fs_cache(self):
+        """Verifies _clear_s3fs_cache executes safely without crashing."""
+        try:
+            main._clear_s3fs_cache()
+        except Exception as e:
+            self.fail(f"_clear_s3fs_cache raised an unexpected exception: {e}")
+
+    def test_build_download_tasks_with_explicit_slots(self):
+        """Verifies _build_download_tasks correctly produces tasks for explicit slots."""
+        with patch.object(main, 'channels', ['13']):
+            slots = [('20261118', '14', '10'), ('20261118', '14', '20')]
+            tasks = main._build_download_tasks(slots=slots)
+            self.assertEqual(len(tasks), 2)
+            self.assertEqual(tasks[0][0], '13')
+            self.assertEqual(tasks[0][1], '20261118')
+            self.assertEqual(tasks[0][2], '14')
+            self.assertEqual(tasks[0][3], '10')
+            self.assertEqual(tasks[1][3], '20')
+
+    def test_source_aws_gap_recovery_detects_missing(self):
+        """Verifies source_AWS gap recovery detects missing products and invokes download for them."""
+        # Create output dir with slot 0 already complete, but slot 1 missing
+        with patch.object(main, 'basePath', self.test_dir):
+            with patch.object(main, 'channels', ['13']):
+                with patch.object(main, 'download_and_pipeline', return_value=['/mock/file.nc']) as mock_dl:
+                    main.source_AWS(catchup_slots=2)
+                    self.assertTrue(mock_dl.called)
+                    call_kwargs = mock_dl.call_args[1]
+                    self.assertIn('slots', call_kwargs)
+                    # Should contain at least 1 missing slot
+                    self.assertGreaterEqual(len(call_kwargs['slots']), 1)
+
+
 if __name__ == '__main__':
     unittest.main()
 

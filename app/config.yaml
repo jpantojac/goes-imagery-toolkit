@@ -79,3 +79,11 @@ plotting:
 performance:
   max_download_workers: 6       # Concurrent download worker threads (recommended: 4 to 8)
   enable_pipeline_overlap: true  # Concurrently trigger image processing as downloads complete
+
+retention:
+  enabled: true                    # Enable automated storage pruning
+  raw_retention_hours: 24          # Retention period in hours for raw NetCDF (.nc/.raw) files in input/
+  output_retention_days: 30        # Retention period in days for rendered products (.png/.tif) in output/ (0 to keep indefinitely)
+  disk_threshold_percent: 85       # Maximum allowable disk usage percentage before emergency purge
+  min_free_disk_gb: 5              # Minimum free disk space in GB required
+  clean_empty_folders: true        # Automatically remove empty Julian day directories

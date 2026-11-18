@@ -60,9 +60,29 @@ python app/main.py \
 | `--borders` | `--croquis` | Dibuja los límites político-administrativos (países y departamentos / croquis) (`true`/`false`) | `--croquis=false` |
 | `--max-dim` | `--resolution-px` | Dimensión máxima de la imagen en píxeles (ej. `2048`, `4096`, o `0` para resolución nativa sin compresión) | `--max-dim=2048` |
 | `--satellite` | `--sat` | Satélite objetivo (`"G16"`, `"G19"`, o `"auto"`). Por defecto `"auto"` detecta automáticamente según la fecha | `--satellite="G16"` |
+| `--channels` | `--canales` | Canales ABI específicos a descargar/procesar (separados por coma, ej. `02,08,13` o `C13`). Por defecto descarga todos los configurados | `--channels=02,08,13` |
+| `--daemon` | | Modo daemon continuo: ejecuta la generación periódicamente en bucle infinito cada N minutos | `--daemon` |
+| `--interval` | `--intervalo` | Cadencia en minutos para el modo daemon (por defecto `10`) | `--interval=10` |
+| `--stop` | | Detiene cualquier daemon o proceso en ejecución activa en segundo plano mediante su lockfile | `--stop` |
+| `--clean` | | Ejecuta la limpieza de retención de almacenamiento bajo demanda y finaliza | `--clean` |
+| `--raw-retention-hours` | | Horas de retención de archivos brutos (.nc/.raw) en input/ (ej. `24` o `3`) | `--raw-retention-hours=24` |
+| `--output-retention-days` | | Días de retención de productos (.png/.tif) en output/ (ej. `30`, o `0` para no purgar) | `--output-retention-days=30` |
+| `--dry-run` | | Simula la purga de retención e imprime espacio a liberar sin borrar archivos | `--dry-run` |
 
 ## 4. Directrices Finales para el Agente
 - **Códigos ICAO / Topónimos**: Siempre que el usuario provea una ciudad, departamento o código ICAO (ej. SKCG, SKBO, etc.), es tu responsabilidad como Agente traducir ese identificador a sus coordenadas reales para los parámetros `--lat` y `--lon`.
 - **Formato de Rangos**: `main.py` no acepta notación de rangos como `00-06`. Todos los rangos solicitados por el usuario deben ser expandidos obligatoriamente (ej. `00,01,02,03,04,05,06`).
 - **Contexto de Ejecución**: Siempre verifica que te encuentras en el entorno de Python correcto (Conda `goes-toolkit` o Docker vía `docker compose exec app python main.py`) que tenga instaladas las dependencias del proyecto (`goes`, `matplotlib`, `gdal`, `basemap`, etc.) antes de ejecutar los comandos.
 - **Resolución Automática de Satélite**: El sistema ahora resuelve el satélite **automáticamente** según la fecha: fechas **anteriores al 7 de abril de 2025** descargan automáticamente de **GOES-16** (`noaa-goes16`), y fechas **posteriores** de **GOES-19** (`noaa-goes19`). Ya no es necesario modificar manualmente `app/config.yaml`, a menos que el usuario pida forzar un satélite específico mediante el parámetro `--satellite="G16"` o `--satellite="G19"`.
+- **Recuperación Automática de Huecos (Gap Recovery)**: En modo `--mode="auto"`, el pipeline analiza automáticamente una ventana de los últimos 30 minutos (3 ranuras de observación). Si alguna ranura no se generó (por retraso en S3 o reinicio), la descarga y procesa automáticamente en paralelo. Además, invalida la caché de listado de directorios de `s3fs` (`_clear_s3fs_cache()`) en cada ciclo para garantizar que los escaneos intermedios cada 10 minutos sean detectados en vivo.
+
+## 5. Arquitectura de Microservicios (API REST y Web GIS)
+El repositorio cuenta con 3 componentes desacoplados que pueden ejecutarse de forma independiente o conjunta:
+- **`app` (Pipeline)**: Generador de imágenes satelitales (CLI / cron). No expone puertos.
+- **`api` (Backend REST)**: Servicio FastAPI que expone metadatos espaciales, catálogo de fechas, secuencias de animación en 60 FPS y streaming de imágenes con ETag en el puerto `8000` (`/docs` para Swagger UI).
+  - Ejecución: `docker compose up -d api` o `python -m uvicorn api.main:app --port 8000`
+  - Tests unitarios: `python -m pytest api/tests/`
+- **`web` (Visor Web GIS)**: Frontend Nginx + React + Leaflet que consume el API en el puerto `3001` (`http://localhost:3001`).
+  - Ejecución: `docker compose up -d web` o `cd web && npm run dev`
+  - Build de producción: `cd web && npm run build` (genera en `web/dist/`)
+
