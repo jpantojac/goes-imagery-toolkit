@@ -64,6 +64,11 @@ except (ImportError, ModuleNotFoundError):
     remap = None
 
 try:
+    from libs.retention import run_retention_cycle
+except (ImportError, ModuleNotFoundError):
+    run_retention_cycle = None
+
+try:
     from mpl_toolkits.basemap import Basemap
 except (ImportError, ModuleNotFoundError):
     Basemap = None
@@ -913,7 +918,9 @@ def run_daemon_loop(
     borders: bool = True,
     max_dim: Optional[int] = None,
     satellite: Optional[str] = None,
-    target_channels: Optional[List[str]] = None
+    target_channels: Optional[List[str]] = None,
+    raw_retention_hours: Optional[float] = None,
+    output_retention_days: Optional[float] = None
 ) -> None:
     """
     Runs a continuous, non-overlapping automation daemon loop.
@@ -950,6 +957,18 @@ def run_daemon_loop(
                 )
         except Exception as e:
             logging.error(f"[Daemon Cycle Error] Exception during generation: {e}")
+
+        # Automated storage retention and disk pruning
+        if run_retention_cycle is not None:
+            try:
+                run_retention_cycle(
+                    base_path=basePath,
+                    config=config,
+                    raw_hours_override=raw_retention_hours,
+                    output_days_override=output_retention_days
+                )
+            except Exception as ret_err:
+                logging.error(f"[Retention Error] Error during storage cleanup cycle: {ret_err}")
 
         # NOAA publishes Full Disk scans ~2-3 min after scan start.
         now = time.time()
@@ -2073,6 +2092,34 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help='Stop any active background pipeline daemon or process using the lockfile PID.'
     )
+    parser.add_argument(
+        '--clean',
+        dest='clean',
+        action='store_true',
+        default=False,
+        help='Run storage retention cleanup on-demand and exit.'
+    )
+    parser.add_argument(
+        '--raw-retention-hours',
+        dest='raw_retention_hours',
+        type=float,
+        default=None,
+        help='Retention period in hours for raw files (.nc/.raw) in input/ (e.g. 24 or 3).'
+    )
+    parser.add_argument(
+        '--output-retention-days',
+        dest='output_retention_days',
+        type=float,
+        default=None,
+        help='Retention period in days for output products (.png/.tif) in output/ (e.g. 30).'
+    )
+    parser.add_argument(
+        '--dry-run',
+        dest='dry_run',
+        action='store_true',
+        default=False,
+        help='Simulate retention cleanup without actually deleting files.'
+    )
     return parser
 
 def main(argv: Optional[List[str]] = None) -> None:
@@ -2099,8 +2146,22 @@ def main(argv: Optional[List[str]] = None) -> None:
             logging.warning("No active pipeline daemon was found running.")
             sys.exit(0)
 
+    if args.clean:
+        if run_retention_cycle is not None:
+            run_retention_cycle(
+                base_path=basePath,
+                config=config,
+                raw_hours_override=args.raw_retention_hours,
+                output_days_override=args.output_retention_days,
+                dry_run=args.dry_run
+            )
+            sys.exit(0)
+        else:
+            logging.error("Retention module could not be loaded.")
+            sys.exit(1)
+
     if not args.mode:
-        logging.error("Execution mode (--mode or --tipo) is required. Use: auto | manual (or pass --stop to terminate a daemon)")
+        logging.error("Execution mode (--mode or --tipo) is required. Use: auto | manual (or pass --stop / --clean)")
         parser.print_help()
         sys.exit(1)
 
@@ -2224,7 +2285,9 @@ def main(argv: Optional[List[str]] = None) -> None:
                     borders=args.borders,
                     max_dim=args.max_dim,
                     satellite=args.satellite,
-                    target_channels=target_channels
+                    target_channels=target_channels,
+                    raw_retention_hours=args.raw_retention_hours,
+                    output_retention_days=args.output_retention_days
                 )
             else:
                 auto_date(

@@ -304,6 +304,33 @@ docker compose exec -d app python main.py \
 >      --borders=false
 >    ```
 
+#### Storage Retention & Disk Pruning Engine
+
+To prevent disk saturation when running continuously in automated daemon mode, the toolkit includes an automated retention and pruning engine (`libs/retention.py`):
+
+1. **Hourly Raw Input Retention (`raw_retention_hours`)**:
+   - Intermediate NetCDF files (`.nc`/`.raw` in `input/`) account for ~90% of disk usage (up to 425 MB per file).
+   - Once rendered, they are retained for a configurable window in **hours** (default: `24` hours).
+   - If desired, the user can set a shorter window such as **3 hours** (`--raw-retention-hours=3`) for resource-constrained VPS servers.
+2. **Historical Output Product Retention (`output_retention_days`)**:
+   - Rendered products (`.png`, `.pgw`, `.tif` in `output/`) are preserved for a configurable period in **days** (default: `30` days, or `0` to keep indefinitely).
+   - The preview directory `latest/` is permanently protected and never deleted.
+3. **Emergency Disk Safeguard**:
+   - If host disk capacity exceeds `disk_threshold_percent` (default: `85%`) or free space falls below `min_free_disk_gb` (default: `5 GB`), an emergency purge aggressively unlinks the oldest raw files first until safe limits are restored.
+4. **Empty Folder Pruning**:
+   - Julian day directories in `input/` and `output/` that become empty are automatically removed.
+
+```bash
+# Manual on-demand retention cleanup:
+python app/main.py --clean
+
+# Cleanup with custom thresholds (e.g. 3 hours for raw files, 15 days for output products):
+python app/main.py --clean --raw-retention-hours=3 --output-retention-days=15
+
+# Dry-run simulation (calculates space to be freed without deleting anything):
+python app/main.py --clean --dry-run
+```
+
 #### Overlap Prevention & Latency Protection (`SingleInstanceLock`)
 
 When satellite imagery is generated on a recurring schedule (either via `--daemon` or system `crontab`), unexpected network latency might cause a download to take longer than the standard 10-minute cadence.
@@ -330,6 +357,10 @@ If you prefer external scheduling over daemon mode, configure a standard Linux `
 | `--daemon` | | `flag` | `False` | Run in persistent daemon mode, executing observation cycles every N minutes without termination. |
 | `--interval` | `--intervalo` | `int` | `10` | Cadence interval in minutes for daemon mode (default: 10). |
 | `--stop` | | `flag` | `False` | Stop any active background pipeline daemon or process using the lockfile PID. |
+| `--clean` | | `flag` | `False` | Run storage retention cleanup on-demand and exit. |
+| `--raw-retention-hours` | | `float` | `24` | Retention period in hours for raw files (`.nc`/`.raw`) in `input/` (e.g. `24` or `3`). |
+| `--output-retention-days` | | `float` | `30` | Retention period in days for output products (`.png`/`.tif`) in `output/` (`0` to keep indefinitely). |
+| `--dry-run` | | `flag` | `False` | Simulate retention cleanup without deleting any files. |
 | `--date` | `--fecha`, `--dates` | `str` | `None` | Date in `YYYYMMDD` format (comma-separated for multiple dates). |
 | `--hours` | `--horas` | `str` | `None` | UTC hours in `HH` format (comma-separated, e.g. `00,06,12`). |
 | `--minutes` | `--minutos` | `str` | `None` | Minutes in `MM` format (comma-separated, e.g. `00,30`). |

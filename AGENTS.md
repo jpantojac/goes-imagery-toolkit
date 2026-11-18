@@ -64,6 +64,10 @@ python app/main.py \
 | `--daemon` | | Modo daemon continuo: ejecuta la generación periódicamente en bucle infinito cada N minutos | `--daemon` |
 | `--interval` | `--intervalo` | Cadencia en minutos para el modo daemon (por defecto `10`) | `--interval=10` |
 | `--stop` | | Detiene cualquier daemon o proceso en ejecución activa en segundo plano mediante su lockfile | `--stop` |
+| `--clean` | | Ejecuta la limpieza de retención de almacenamiento bajo demanda y finaliza | `--clean` |
+| `--raw-retention-hours` | | Horas de retención de archivos brutos (.nc/.raw) en input/ (ej. `24` o `3`) | `--raw-retention-hours=24` |
+| `--output-retention-days` | | Días de retención de productos (.png/.tif) en output/ (ej. `30`, o `0` para no purgar) | `--output-retention-days=30` |
+| `--dry-run` | | Simula la purga de retención e imprime espacio a liberar sin borrar archivos | `--dry-run` |
 
 ## 4. Directrices Finales para el Agente
 - **Códigos ICAO / Topónimos**: Siempre que el usuario provea una ciudad, departamento o código ICAO (ej. SKCG, SKBO, etc.), es tu responsabilidad como Agente traducir ese identificador a sus coordenadas reales para los parámetros `--lat` y `--lon`.
